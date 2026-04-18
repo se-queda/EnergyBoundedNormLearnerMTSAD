@@ -82,16 +82,15 @@ def train_on_machine(machine_id, config):
     
     # 🚀 DYNAMIC PATIENCE SELECTION
     total_sensors = len(topo.idx_phy) + len(topo.idx_res)
+    base_patience = int(config.get("patience", 10))
     if len(topo.res_to_dead_local) == total_sensors and total_sensors > 0:
         # All sensors are dead
         current_patience = 100 
         print(f"📡 Mode: All Sensors Dead. Setting High Patience ({current_patience})")
     else:
         # Healthy Machine: low patience prevents overfitting
-        current_patience = config.get("patience", 10)
+        current_patience = base_patience
         print(f"🛰️ Mode: Dual-Anchor. Setting Standard Patience ({current_patience})")
-
-    config['patience'] = current_patience
     # 2. Build Datasets
     from src.utils import build_tf_datasets
     train_ds, val_ds, _, train_idx, val_idx = build_tf_datasets(
@@ -118,7 +117,7 @@ def train_on_machine(machine_id, config):
         decoder=decoder,
         discriminator=discriminator,
         res_discriminator=res_discriminator,
-        config=config,
+        config={**config, "patience": current_patience},
         topology=topo,
     )
     

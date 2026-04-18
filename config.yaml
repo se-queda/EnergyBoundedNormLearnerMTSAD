@@ -39,7 +39,7 @@ epochs: 100 #
 patience: 3 # Early stopping patience
 saved_score: false # Save raw score artifacts to disk in addition to live scoring
 
-dataset: SMAP # Dataset type: SMD
+dataset: MSL # Dataset type: SMD
 data_root:
   SMD: /home/utsab/Data/smd/ServerMachineDataset
   SMAP: /home/utsab/Data/SMAP

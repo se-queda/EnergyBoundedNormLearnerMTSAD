@@ -18,33 +18,6 @@ from train import train_on_machine, load_config, _resolve_data_root
 SMAP_SKIP_IDS = {
 }
 
-SMD_SKIP_IDS = {
-    'machine-1-1',
-    'machine-1-2',
-    'machine-1-3',
-    'machine-1-4',
-    'machine-1-5',
-    'machine-1-6',
-    'machine-1-7',
-    'machine-1-8',
-    'machine-2-1',
-    'machine-2-2',
-    'machine-2-3',
-    'machine-2-4',
-    'machine-2-5',
-    'machine-2-6',
-    'machine-2-7',
-    'machine-2-8',
-    'machine-2-9',
-    'machine-3-1',
-    'machine-3-10',
-    'machine-3-11',
-    'machine-3-2',
-    'machine-3-3',
-    'machine-3-4',
-    'machine-3-5',
-}
-
 def worker_task(mid, config, perf_path):
     """Child process executor with clean TF initialization."""
     try:
@@ -170,17 +143,11 @@ def run_all_entities(config, out_dir):
         machine_ids = [mid for mid in machine_ids if mid not in SMAP_SKIP_IDS]
         if before != len(machine_ids):
             print(f"🧹 Skipped {before - len(machine_ids)} SMAP entities via hardcoded resume filter")
-    elif dataset_type == "SMD":
-        before = len(machine_ids)
-        machine_ids = [mid for mid in machine_ids if mid not in SMD_SKIP_IDS]
-        if before != len(machine_ids):
-            print(f"🧹 Skipped {before - len(machine_ids)} SMD entities via hardcoded resume filter")
 
     print(f"📂 Found {len(machine_ids)} entities for {dataset_type}")
 
     os.makedirs(out_dir, exist_ok=True)
     perf_path = os.path.join(out_dir, "performance.csv")
-    # Serial execution: one entity at a time, no multiprocessing.
     for mid in machine_ids:
         worker_task(mid, config, perf_path)
 
