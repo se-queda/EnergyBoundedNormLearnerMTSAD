@@ -80,7 +80,7 @@ def train_on_machine(machine_id, config):
     phy_dim = len(topo.idx_phy)
     res_dim = len(topo.idx_res)
     
-    # 🚀 DYNAMIC PATIENCE SELECTION
+    # DYNAMIC PATIENCE SELECTION
     total_sensors = len(topo.idx_phy) + len(topo.idx_res)
     base_patience = int(config.get("patience", 10))
     if len(topo.res_to_dead_local) == total_sensors and total_sensors > 0:
@@ -164,7 +164,7 @@ def train_on_machine(machine_id, config):
 
     test_labels = test_labels[:actual_len]
     
-    print(f"🏁 [FINAL SYNC] Raw windows stitched to {actual_len} points | Labels: {len(test_labels)} | Anomaly Rate: {np.mean(test_labels):.2%}")
+    print(f" Raw windows stitched to {actual_len} points | Labels: {len(test_labels)} | Anomaly Rate: {np.mean(test_labels):.2%}")
 
     test_phy_raw = None
     test_res_raw = None
@@ -262,7 +262,7 @@ def train_on_machine(machine_id, config):
     aff_p = float(scored["aff_p"])
     aff_r = float(scored["aff_r"])
     aff1 = float(scored["aff1"])
-    print(f"🏆 [RESULTS] AUC: {auc_score:.4f} | PR-AUC: {pr_auc_score:.4f} | P: {p_best:.4f} | R: {r_best:.4f} | F1: {f1_best:.4f} | vusauc: {vusauc:.4f} | vuspr: {vuspr:.4f} | aff_p: {aff_p:.4f} | aff_r: {aff_r:.4f} | aff1: {aff1:.4f}")
+    print(f"[RESULTS] AUC: {auc_score:.4f} | PR-AUC: {pr_auc_score:.4f} | P: {p_best:.4f} | R: {r_best:.4f} | F1: {f1_best:.4f} | vusauc: {vusauc:.4f} | vuspr: {vuspr:.4f} | aff_p: {aff_p:.4f} | aff_r: {aff_r:.4f} | aff1: {aff1:.4f}")
     K.clear_session()
 
     gc.collect()

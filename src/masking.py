@@ -1,22 +1,15 @@
 import tensorflow as tf
 import numpy as np
 
-# --- LATENT MIXING ---
 
-def mix_features(z_orig, z_other):
-    """
-    Interpolates between anchor and augmented latents for the discriminator task.
-    """
+
+def mix_features(z_orig, z_other): #latent mixing
     batch_size = tf.shape(z_orig)[0]
     alpha = tf.random.uniform((batch_size, 1), minval=0.0, maxval=1.0)
     z_mixed = alpha * z_orig + (1.0 - alpha) * z_other
     return z_mixed, alpha
 
-def random_masker(data_windows, mask_rates=(0.05, 0.15, 0.30, 0.50), seed=None):
-    """
-    Randomly masks full feature windows (all timesteps) at the given rates.
-    Returns 4 masked views matching the original interface.
-    """
+def random_masker(data_windows, mask_rates=(0.05, 0.15, 0.30, 0.50), seed=None):#masker
     rng = np.random.default_rng(seed) if seed is not None else None
     views = []
     N, T, F = data_windows.shape

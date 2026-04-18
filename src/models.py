@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tensorflow.keras import layers, models, regularizers
 
-# Preferred persona namespace
+
 namespace = tf.keras
 
 REG = 1e-4
@@ -23,8 +23,6 @@ def hnn_projector(x, projection_dim=256):
             kernel_regularizer=regularizers.l2(REG)
         )(x)
         x = layers.BatchNormalization()(x)
-        
-        # Add residual connection
         x = layers.Add()([x, shortcut])
         x = layers.Activation('tanh')(x)
         
@@ -36,8 +34,8 @@ class BiDirectionalSymplecticLayer(layers.Layer):
         self.feature_dim = feature_dim
         self.steps = steps
         self.dt = dt
-        # The internal Hamiltonian MLP stays the same
-        self.h_dense1 = layers.Dense(feature_dim * 2, activation='tanh') # Changed to tanh for HNN stability
+        # iinternal Hamiltonian MLP 
+        self.h_dense1 = layers.Dense(feature_dim * 2, activation='tanh') 
         self.h_dense2 = layers.Dense(feature_dim * 2, activation='tanh')
         self.h_out = layers.Dense(1, use_bias=False, name="h_out") 
 
@@ -63,7 +61,6 @@ class BiDirectionalSymplecticLayer(layers.Layer):
 
     def call(self, x):
         # 1. Anchor at the Midpoint (Center of the 64-step window)
-        # This prevents the 'retarded' logic of guessing from the edge.
         mid_idx = x.shape[1] // 2 
         
         # Extract coordinates at the center
@@ -71,19 +68,15 @@ class BiDirectionalSymplecticLayer(layers.Layer):
         p_mid = x[:, mid_idx, :] - x[:, mid_idx - 1, :] 
         
         # 2. Forward Integration (+dt) from center to end
-        # Covers the second half of the window
         q_f, p_f = q_mid, p_mid
         for _ in range(self.steps // 2):
             q_f, p_f = self.leapfrog_step(q_f, p_f, self.dt)
             
         # 3. Backward Integration (-dt) from center to start
-        # Reconstructs the first half of the window
         q_b, p_b = q_mid, p_mid
         for _ in range(self.steps // 2):
             q_b, p_b = self.leapfrog_step(q_b, p_b, -self.dt)
             
-        # Now returning: [Reconstructed Start, Reconstructed Center, Reconstructed End]
-        # This forces the decoder to match the HNN trajectory to the raw data at 3 points.
         return tf.concat([q_b, p_b, q_mid, p_mid, q_f, p_f], axis=-1)
 
 
@@ -91,7 +84,6 @@ def fno_lifting(x, latent_dim=256):
     x = layers.Dense(latent_dim, 
                      kernel_regularizer=regularizers.l2(REG),
                      name="FNO_Lifting")(x)
-    # Jerk masking happens here or on the raw input as you requested
     x = layers.Activation('gelu')(x) 
     return x
 class SpectralConv1D(layers.Layer):
@@ -102,7 +94,6 @@ class SpectralConv1D(layers.Layer):
 
     def build(self, input_shape):
         in_channels = input_shape[-1]
-        # Ensure weights are initialized with fully-defined shapes
         self.weights_real = self.add_weight(
             shape=(self.modes, in_channels, self.out_channels),
             initializer='glorot_normal',
@@ -117,7 +108,6 @@ class SpectralConv1D(layers.Layer):
         )
 
     def call(self, x):
-        # x shape: (Batch, Time, Channels)
         n = tf.shape(x)[1]
         
         # 1. Fourier Transform
@@ -135,23 +125,16 @@ class SpectralConv1D(layers.Layer):
         
         x = tf.signal.irfft(out_ft, fft_length=[n])
         x = tf.transpose(x, perm=[0, 2, 1])
-        
-        # --- THE FIX ---
-        # Explicitly restore the static channel dimension for BatchNormalization
-        # This prevents the 'None' dimension error during variable initialization.
         x.set_shape([None, None, self.out_channels])
         return x
 
     def compute_output_shape(self, input_shape):
-        """Mandatory for custom layers to help Keras trace shapes."""
         return (input_shape[0], input_shape[1], self.out_channels)
 
 def fno_block(x, filters, modes, dropout=0.1):
-    """NVIDIA Physics-ML Block: Fourier Path + Pointwise Shortcut."""
     shortcut = namespace.layers.Conv1D(filters, 1, padding='same', 
                                       kernel_regularizer=namespace.regularizers.l2(REG))(x)
     
-    # This call now carries the static shape info correctly
     x_f = SpectralConv1D(filters, modes)(x)
     x_f = namespace.layers.BatchNormalization()(x_f)
     
@@ -171,17 +154,13 @@ def build_dual_encoder(input_shape_sys, input_shape_res, config):
     f_modes = config.get("fno_modes", 32)
     
     if feat_sys>0:
-        # --- Branch A: Hamiltonian Dynamics (Consensus) ---
+    # Branch A: Hamiltonian
         proj_hnn = hnn_projector(inputs_sys, projection_dim=h_dim)
-        
-        # Leapfrog remains the core physics engine
         flow = BiDirectionalSymplecticLayer(
             feature_dim=h_dim, 
             steps=config.get("hnn_steps", 4), 
             dt=config.get("hnn_dt", 0.1)
         )(proj_hnn)
-        
-        # Added Residual Connection around HNN output
         x_sys = layers.Dense(L // 2, activation='tanh', 
                                 kernel_regularizer=regularizers.l2(REG))(flow)
         x_sys = layers.Dropout(drop_rate)(x_sys)
@@ -189,15 +168,13 @@ def build_dual_encoder(input_shape_sys, input_shape_res, config):
     else:
         z_sys = layers.Lambda(lambda x: tf.zeros((tf.shape(x)[0], L // 2)), name="z_sys")(inputs_sys)
     
-# --- Branch B: NVIDIA-style FNO Encoder (Residual Path) ---
-    # 1. Lifting Layer: Maps raw dead features to latent space
+    # Branch B: FNO Encoder
+    # 1. Lifting Layer
     x_fno = fno_lifting(inputs_res, config.get("hnn_feature_dim", 256))
-    
-    # 2. Iterative Spectral Convolutions
     for _ in range(config.get("fno_blocks", 1)):
         x_fno = fno_block(x_fno, h_dim, modes=f_modes)
     
-    # 3. Final Latent Projection (Developing the Joint Manifold)
+    # 3. Final Latent Projection
     x_fno = layers.GlobalAveragePooling1D()(x_fno)
     z_res = layers.Dense(L // 2, name="z_res")(x_fno)
     
@@ -211,11 +188,11 @@ def build_dual_decoder(feat_sys, feat_res, output_steps, config):
     f_modes = config.get("fno_modes", 8)
     drop_rate = config.get("dropout", 0.1)
     
-    # Latent inputs from the joint manifold
+    # Latent inputs
     z_sys_in = layers.Input(shape=(L // 2,), name="z_sys_input")
     z_res_in = layers.Input(shape=(L // 2,), name="z_res_input")
     
-    # --- DECODER A: Physics Path (Hamiltonian Reconstruction) ---
+    # DECODER A:Hamiltonian Reconstruction
     x_s = layers.Dense(output_steps * 64, activation='tanh', 
                        kernel_regularizer=regularizers.l2(REG))(z_sys_in)
     x_s = layers.Reshape((output_steps, 64))(x_s)
@@ -225,16 +202,14 @@ def build_dual_decoder(feat_sys, feat_res, output_steps, config):
                         kernel_regularizer=regularizers.l2(REG))(x_s)
         out_sys = layers.Activation('linear', name='out_phy')(x_s)
     else:
-        # Safety for zero-physics feature cases
+        # Safety for zero-hnn feature cases
         out_sys = layers.Lambda(lambda x: tf.zeros((tf.shape(x)[0], output_steps, 0)), 
                                 name='out_phy')(x_s) 
     
-    # --- DECODER B: FNO Path (Residual/Dead Feature Reconstruction) ---
+    # DECODER B: FNO Path 
     x_r = layers.Dense(output_steps * h_dim, activation='gelu',
                        kernel_regularizer=regularizers.l2(REG))(z_res_in)
     x_r = layers.Reshape((output_steps, h_dim))(x_r)
-    
-    # 2. Spectral Refinement: Reconstruct global frequency patterns
     for i in range(config.get("fno_decoder_blocks", 1)):
         x_r = fno_block(x_r, h_dim, modes=f_modes, dropout=drop_rate)
 

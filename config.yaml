@@ -1,15 +1,14 @@
 # --- Structural & Windowing Parameters ---
-# These now drive load_smd_windows directly
-window_size: 64 # ACAE default window [cite: 544, 580]
-stride: 2 # ACAE default interval 'd' [cite: 544, 577]
+window_size: 64
+stride: 2
 test_stride: 1
-batch_size: 128 #
-test_batch_size: 16 # reconstruction\/inference batch
-val_split: 0.2 # Training data split
+batch_size: 128
+test_batch_size: 16
+val_split: 0.2
 
 # --- Model Hyperparameters ---
 latent_dim: 256 # Total (z_sys[128] + z_res[128])
-lr: 0.0001 # Adam optimizer learning rate [cite: 545]
+lr: 0.0001 # Adam optimizer learning rate
 
 # --- Hamiltonian Physics Parameters ---
 hnn_steps: 3 # Integration steps for Leapfrog
@@ -25,9 +24,9 @@ p_tile: 90 # Percentile for FNO masking
 mask_tiers: [95, 90, 85, 80]
 
 # --- Loss Weights & Training ---
-lambda_d: 1.0 # Discriminator loss weight λ1 [cite: 475, 544]
-lambda_e: 1.0 # Encoder loss weight λ2 [cite: 475, 544]
-recon_weight: 1.0 # Reconstruction loss weight [cite: 475]
+lambda_d: 1.0 # Discriminator loss weight λ1
+lambda_e: 1.0 # Encoder loss weight λ2
+recon_weight: 1.0 # Reconstruction loss weight
 alpha_vpo: 1.0 # Hamiltonian violation penalty
 sentinel_weight: 10.0
 res_adv_weight: 1.0
@@ -39,7 +38,7 @@ epochs: 100 #
 patience: 3 # Early stopping patience
 saved_score: false # Save raw score artifacts to disk in addition to live scoring
 
-dataset: MSL # Dataset type: SMD
+dataset: SMAP # Dataset type
 data_root:
   SMD: /home/utsab/Data/smd/ServerMachineDataset
   SMAP: /home/utsab/Data/SMAP

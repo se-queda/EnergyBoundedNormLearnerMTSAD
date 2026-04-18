@@ -38,43 +38,29 @@ def _stack_smd_labels(data_root, machine_ids):
 
 
 def load_smd_compact_windows(data_root, config):
-    """
-    Pooled SMD loader with the same numerical contract used by the other datasets.
 
-    Data flow:
-    1. Load and concatenate all SMD train/test point sequences and test labels.
-    2. Fit StandardScaler on pooled train only and transform both pooled splits.
-    3. Route normalized pooled features into physics and residual branches.
-    4. Window each branch into [N, W, F_branch] using stride for train and
-       test_stride for test.
-    5. Build masked training views from the pooled train windows only.
-    6. Truncate pooled point labels to the last test point covered by the
-       windowed pooled test set.
-    """
     window = config["window_size"]
     stride = config["stride"]
     test_stride = config.get("test_stride", stride)
 
-    print("EBNL loader: SMD_Compact")
+    print("Training: SMD")
 
     machine_ids = _list_smd_ids(data_root)
 
-    # 1. Load pooled train/test point sequences and pooled test labels.
+    # 1. Loading & Standardization
     train_raw = _stack_smd_split(data_root, "train", machine_ids)
     test_raw = _stack_smd_split(data_root, "test", machine_ids)
     test_labels = _stack_smd_labels(data_root, machine_ids)
-
-    # 2. Fit preprocessing on pooled train only, then transform pooled test.
     scaler = StandardScaler()
     train_total_norm = scaler.fit_transform(train_raw)
     test_total_norm = scaler.transform(test_raw)
 
-    # 3. Discover branch routing from pooled training statistics only.
+    # 2.Routing
     (train_phy, train_res, test_phy, test_res), topo, _ = route_features(
         train_total_norm, test_total_norm
     )
 
-    # 4. Convert pooled point sequences to overlapping windows [N, W, F_branch].
+    # 3. Windowing
     def create_windows(data, current_stride):
         num_windows = (data.shape[0] - window) // current_stride + 1
         return np.array(
@@ -85,9 +71,7 @@ def load_smd_compact_windows(data_root, config):
     train_w_phy = create_windows(train_phy, stride)
     train_res_w = create_windows(train_res, stride)
 
-    # 5. Build masked train views:
-    #    phy_views  -> [N, 5, W, F_phy]
-    #    res_views  -> [N, W, F_res]
+    # 4. Masking Views
     v1, v2, v3, v4 = random_masker(train_w_phy)
     phy_views = np.stack([train_w_phy, v1, v2, v3, v4], axis=1)
     rv1, = random_masker(train_res_w, mask_rates=(0.25,))
@@ -106,7 +90,7 @@ def load_smd_compact_windows(data_root, config):
         "topology": topo,
     }
 
-    # 6. Keep labels only up to the last point touched by the pooled test windows.
+    # 5.Label Parsing 
     actual_test_len = (test_final["phy"].shape[0] - 1) * test_stride + window
     test_labels = test_labels[:actual_test_len]
 

@@ -13,7 +13,7 @@ def discriminator_loss(d_pos, d_neg, alpha, beta):
 
 def encoder_loss(d_pos, d_neg, beta):
 
-    fake_alpha = tf.ones_like(d_pos[:, 1:])  # shape: (batch, 1)
+    fake_alpha = tf.ones_like(d_pos[:, 1:]) 
     target_pos = tf.concat([tf.ones_like(fake_alpha), fake_alpha], axis=1)  
     target_neg = tf.concat([tf.zeros_like(beta), beta], axis=1)             
 

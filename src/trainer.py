@@ -5,7 +5,6 @@ import numpy as np
 from types import SimpleNamespace
 from .losses import encoder_loss, discriminator_loss
 from .masking import mix_features
-# Preferred persona namespace
 namespace = tf.keras
 
 class DualAnchorACAETrainer:
@@ -31,7 +30,6 @@ class DualAnchorACAETrainer:
         self.lambda_d = config["lambda_d"]
         self.lambda_e = config["lambda_e"]
         self.recon_weight = config["recon_weight"]
-        self.alpha_vpo = config["alpha_vpo"]
         self.sentinel_weight = config["sentinel_weight"]
         self.res_adv_weight = config.get("res_adv_weight", 1.0)
         self.jitter_alpha_max = config.get("jitter_alpha_max", 0.45)
