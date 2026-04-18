@@ -1,0 +1,47 @@
+# --- Structural & Windowing Parameters ---
+# These now drive load_smd_windows directly
+window_size: 64 # ACAE default window [cite: 544, 580]
+stride: 2 # ACAE default interval 'd' [cite: 544, 577]
+test_stride: 1
+batch_size: 128 #
+test_batch_size: 16 # reconstruction\/inference batch
+val_split: 0.2 # Training data split
+
+# --- Model Hyperparameters ---
+latent_dim: 256 # Total (z_sys[128] + z_res[128])
+lr: 0.0001 # Adam optimizer learning rate [cite: 545]
+
+# --- Hamiltonian Physics Parameters ---
+hnn_steps: 3 # Integration steps for Leapfrog
+hnn_dt: 0.05 # Time step for symplectic flow
+hnn_feature_dim: 128 # Hidden dimension for HNN MLP
+fno_modes: 8
+
+# --- Physics-Informed Preprocessing (Moved from utils.py) ---
+savgol_len: 11 # Window length for Jerk smoothing
+savgol_poly: 3 # Poly order for Jerk smoothing
+sparsity_factor: 10 # Knot selection for Spline envelopes
+p_tile: 90 # Percentile for FNO masking
+mask_tiers: [95, 90, 85, 80]
+
+# --- Loss Weights & Training ---
+lambda_d: 1.0 # Discriminator loss weight λ1 [cite: 475, 544]
+lambda_e: 1.0 # Encoder loss weight λ2 [cite: 475, 544]
+recon_weight: 1.0 # Reconstruction loss weight [cite: 475]
+alpha_vpo: 1.0 # Hamiltonian violation penalty
+sentinel_weight: 10.0
+res_adv_weight: 1.0
+jitter_alpha_max: 0.45
+lambda_joint: 1.0
+
+# --- Training Loop ---
+epochs: 100 #
+patience: 3 # Early stopping patience
+
+dataset: MSL # Dataset type: SMD
+data_root:
+  SMD: /home/utsab/Data/smd/ServerMachineDataset
+  SMAP: /home/utsab/Data/SMAP
+  MSL: /home/utsab/Data/MSL
+  PSM: /home/utsab/Data/PSM
+  SWAT: /home/utsab/Data/SWAT
