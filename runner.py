@@ -1,5 +1,4 @@
 import argparse
-import sys
 import csv
 import gc
 import os
@@ -20,7 +19,6 @@ SMAP_SKIP_IDS = {
 }
 
 def worker_task(mid, config, perf_path):
-    """Child process executor with clean TF initialization."""
     try:
         parent = os.path.dirname(perf_path)
         if parent:
@@ -78,7 +76,7 @@ def worker_task(mid, config, perf_path):
         _compute_and_append_avg(perf_path)
 
     except Exception as e:
-        print(f"❌ Failed on {mid}: {e}")
+        print(f" Failed on {mid}: {e}")
         traceback.print_exc()
         raise
     finally:
@@ -146,7 +144,7 @@ def run_all_entities(config, out_dir):
         if before != len(machine_ids):
             print(f"🧹 Skipped {before - len(machine_ids)} SMAP entities via hardcoded resume filter")
 
-    print(f"📂 Found {len(machine_ids)} entities for {dataset_type}")
+    print(f"Found {len(machine_ids)} entities for {dataset_type}")
 
     os.makedirs(out_dir, exist_ok=True)
     perf_path = os.path.join(out_dir, "performance.csv")
@@ -199,27 +197,12 @@ def _write_final_results(dataset, seed_avgs):
         writer.writerow(["STD"] + [f"{x:.6f}" for x in std_vals])
 
 
-def _serial_schedule(config, seed_label):
-    datasets = ["MSL", "SMAP", "SMD"]
-    for dataset in datasets:
-        cfg = _dataset_cfg(config, dataset)
-        if not cfg.get("data_root"):
-            continue
-        out_dir = os.path.join("results", dataset, seed_label)
-        os.makedirs(out_dir, exist_ok=True)
-        run_all_entities(cfg, out_dir)
-
-
-def run_suite(config, seeds):
-    datasets = ["SMD", "SMAP", "MSL", "PSM"]
+def run_experiments(config, datasets, seeds):
+    datasets = [d.upper() for d in datasets]
     seed_avgs_by_dataset = {d: [] for d in datasets}
 
-    for i, s in enumerate(seeds):
+    for s in seeds:
         os.environ["SUITE_SEED"] = str(s)
-        if i == 0:
-            os.environ["SUITE_SAVE_SCORES"] = "1"
-        else:
-            os.environ["SUITE_SAVE_SCORES"] = "0"
         seed_manager.initialize_seeds(int(s))
         seed_label = f"seed_{s}"
 
@@ -242,36 +225,23 @@ def run_suite(config, seeds):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="config.yaml")
-    parser.add_argument("--suite", action="store_true", help="Run all datasets for N seeds")
-    parser.add_argument("--all", action="store_true", help="Run all datasets once (seed_single)")
-    parser.add_argument("--seeds", type=int, default=5, help="Number of seeds for suite runs")
-    parser.add_argument("--serial", action="store_true", help="With --all, run MSL/SMAP/SMD serially into seed_single dirs")
-    # Optional override for quick testing
+    parser.add_argument("--all", action="store_true", help="Run all entities once for the dataset in config.yaml")
+    parser.add_argument("--datasets", nargs="+", help="Datasets for the final experimental run, e.g. --datasets MSL SMAP SMD")
+    parser.add_argument("--seeds", nargs="+", type=int, help="Explicit seeds for the final experimental run, e.g. --seeds 42 43")
     parser.add_argument("--id", type=str, help="Specify a single machine/channel ID to test")
     args = parser.parse_args()
 
-    # Assuming load_config is available in your environment
     config = load_config(args.config)
     dataset_type = config.get("dataset", "SMD").upper()
-    
-    if args.suite:
-        rng = np.random.default_rng()
-        seeds_path = "results/suite_seeds.txt"
-        os.makedirs("results", exist_ok=True)
-        if os.path.isfile(seeds_path):
-            with open(seeds_path, "r") as f:
-                seeds = [int(x.strip()) for x in f.read().split(",") if x.strip()]
-        else:
-            seeds = rng.integers(0, 1_000_000, size=args.seeds).tolist()
-            with open(seeds_path, "w") as f:
-                f.write(",".join(str(s) for s in seeds))
-        run_suite(config, seeds)
+
+    if (args.datasets is None) ^ (args.seeds is None):
+        parser.error("--datasets and --seeds must be provided together")
+
+    if args.datasets and args.seeds:
+        run_experiments(config, args.datasets, args.seeds)
         return
 
     if args.all:
-        if args.serial:
-            _serial_schedule(config, "seed_single")
-            return
         dataset = config.get("dataset", "SMD").upper()
         cfg = _dataset_cfg(config, dataset)
         if not cfg.get("data_root"):
@@ -286,8 +256,8 @@ def main():
         if args.id:
             mid = args.id
         else:
-            # Smart defaults for single runs based on dataset
-            defaults = {"SMD": "machine-1-1", "MSL": "T-10", "SMAP": "D-12", "PSM": "PSM_Pooled"}
+            # defaults for single runs based on dataset
+            defaults = {"MSL": "C-1", "SMAP": "A-1"}
             mid = defaults.get(dataset_type, "test_entity")
             if dataset_type == "SMD" and config.get("smd_compact", False):
                 mid = "SMD_Compact"
@@ -296,13 +266,6 @@ def main():
         worker_task(mid, config, csv_path)
         _compute_and_append_avg(csv_path)
 
-    # Clean legacy score dumps
-    try:
-        legacy_scores = os.path.join("scores", dataset_type, f"{mid}_scores.csv")
-        if os.path.isfile(legacy_scores):
-            os.remove(legacy_scores)
-    except Exception:
-        pass
 
 if __name__ == "__main__":
     main()

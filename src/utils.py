@@ -23,8 +23,7 @@ def build_tf_datasets(
     window_size=None,
     stride=None,
 ):
-    """Synchronized TF pipeline for Dual-Anchor branches."""
-    # FIXED: Key was 'res_windows', now 'res_views' to match load_smd_windows
+
     phy_data = train_final['phy_views']   
     res_data = train_final['res_views'] 
     num_samples = len(phy_data)
@@ -52,12 +51,10 @@ def build_tf_datasets(
                             end = start + int(window_size)
                             window_labels[i] = int(np.max(train_labels[start:end]))
             if window_labels is None:
-                # Assume training data is normal if labels are not provided.
                 window_labels = np.zeros(num_samples, dtype=int)
 
             normal_idx = indices[window_labels[indices] == 0]
             if len(normal_idx) == 0:
-                # Fallback to full set if no normal windows found.
                 normal_idx = indices
             val_size = int(len(normal_idx) * val_split)
             if val_size <= 0 and val_split > 0:

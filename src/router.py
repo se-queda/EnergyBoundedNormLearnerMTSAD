@@ -24,8 +24,6 @@ class MachineTopology:
         print("-" * 35)
         print(f"Correlated Branch (HNN) : {len(self.idx_phy)} features")
         print(f"Residual Branch (FNO)  : {len(self.idx_res)} total")
-        print(f"  └─ Isolated sensors      : {len(self.idx_lone)}")
-        print(f"  └─ Dead Sensors   : {len(self.idx_dead)}")
         print("-" * 35)
 
 def route_features(train_data, test_data, dist_threshold=0.5):

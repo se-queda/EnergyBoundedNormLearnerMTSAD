@@ -75,7 +75,9 @@ class EBNL_Trainer:
             recon_res_loss = tf.reduce_mean(tf.square(res_windows - recons_res))
             total_recon_loss = recon_phy_loss + recon_res_loss
 
-            # 5.Adversarial Task (HNN)
+            # 5. HNN adversarial flow:
+            # mix the anchor physics latent with augmented-view latents, then train
+            # the discriminator to separate matched vs shuffled latent mixtures.
             z_pos_all, alpha_all = [], []
             for i in range(4):
                 view_phy = aug_views_phy[:, i, :, :]
@@ -98,7 +100,9 @@ class EBNL_Trainer:
             loss_disc = discriminator_loss(d_out_pos, d_out_neg, alpha_pos, beta_neg)
             loss_enc = encoder_loss(d_out_pos, d_out_neg, beta_neg)
 
-            # 6. Jittered Grid Adversarial Task for FNO
+            # 6. FNO adversarial flow:
+            # jitter the appended time grid on isolated residual channels and train
+            # the residual discriminator to recover the applied jitter strength.
             res_adv_loss = tf.constant(0.0, dtype=tf.float32)
             res_disc_loss = tf.constant(0.0, dtype=tf.float32)
             if tf.reduce_sum(self.res_isolate_mask) > 0:
@@ -128,6 +132,8 @@ class EBNL_Trainer:
                          res_disc_loss +
                          self.lambda_joint * loss_enc)
 
+        # Apply two optimizer views over the shared encoder/decoder: one driven by
+        # the HNO adversarial objective, one by the residual objective.
         hnn_vars = (
             self.encoder.trainable_variables +
             self.decoder.trainable_variables +
@@ -194,7 +200,7 @@ class EBNL_Trainer:
                     val_losses.append((mse_phy + mse_res).numpy())
                 
                 current_val_loss = float(np.mean(val_losses))
-                print(f"✅ Val MSE: {current_val_loss:.4f} | Best: {best_val_loss:.4f}")
+                print(f"Val MSE: {current_val_loss:.4f} | Best: {best_val_loss:.4f}")
                 
                 if current_val_loss < best_val_loss:
                     best_val_loss, wait = current_val_loss, 0
@@ -218,7 +224,7 @@ class EBNL_Trainer:
         }
                     
     def reconstruct(self, test_final, batch_size=128):
-        print("🔍 Generating Point-wise Reconstructions...")
+        print(" Generating Point-wise Reconstructions...")
         phy_views = tf.cast(test_final['phy'], tf.float32) 
         res_data  = tf.cast(test_final['res'], tf.float32)
         phy_anchor = phy_views[:, 0, :, :] if len(phy_views.shape) == 4 else phy_views

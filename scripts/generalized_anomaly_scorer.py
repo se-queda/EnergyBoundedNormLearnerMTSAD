@@ -1,8 +1,6 @@
-#!/usr/bin/env python3
-"""Standalone scorer that reads raw reconstruction artifacts and writes metrics."""
+
 from __future__ import annotations
 
-import csv
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,122 +14,8 @@ if str(REPO_ROOT) not in sys.path:
 from src.smoother import smoother
 from src.tsb_metrics import calculate_tsb_metrics as _tsb_metrics
 
-SCALING     = "identity"
-MIXING      = "sum"
-SMOOTHER    = "causal_consensus"
-CALIB       = "standard"
-PLACEMENT   = "sensor_post"
-GRANULARITY = "branch"
-
-DEFAULT_OUT_ROOT = REPO_ROOT / "posthoc_runs" / "generalized_anomaly_scorer"
-
 METRIC_KEYS = ["auc", "prauc", "p_best", "r_best", "f1_best",
                "vusaucc", "vuspr", "aff_p", "aff_r", "aff1"]
-
-ENTITY_HEADER = (
-    ["dataset", "scaling_method", "mixing_method", "ewma_alpha", "smoother",
-     "train_calibration", "placement", "mix_granularity", "id"]
-    + METRIC_KEYS
-)
-SUMMARY_HEADER = (
-    ["dataset", "scaling_method", "mixing_method", "ewma_alpha", "smoother",
-     "train_calibration", "placement", "mix_granularity"]
-    + METRIC_KEYS
-)
-
-def _meta_int(meta, key: str) -> int:
-    if key not in meta:
-        raise KeyError(
-            f"Key '{key}' not found in meta. "
-            "This indicates a corrupted metadata file. Re-run training."
-        )
-    return int(np.asarray(meta[key]).item())
-
-
-def _meta_window_indices(meta) -> np.ndarray | None:
-    if "window_indices" not in meta:
-        return None
-    arr = np.asarray(meta["window_indices"])
-    if arr.shape == ():
-        val = arr.item()
-        if val is None:
-            return None
-        return np.asarray(val, dtype=np.int64)
-    return np.asarray(arr, dtype=np.int64)
-
-
-def _load_raw_array(base_path: Path) -> np.ndarray | None:
-    npz_path = base_path.with_suffix(".npz")
-    if npz_path.exists():
-        z = np.load(npz_path, allow_pickle=True)
-        return np.asarray(z["err"], dtype=np.float32)
-    return None
-
-
-def load_entity(entity_dir: Path) -> dict[str, Any]:
-    """Load test/train raw errors and their window metadata."""
-    raw_dir = entity_dir / "raw"
-    if not raw_dir.exists():
-        raise FileNotFoundError(f"Missing raw dir: {raw_dir}")
-
-    test_meta = np.load(raw_dir / "test_meta.npz", allow_pickle=True)
-    train_meta_path = raw_dir / "train_meta.npz"
-    if not train_meta_path.exists():
-        raise FileNotFoundError(f"Missing train metadata file: {train_meta_path}")
-    train_meta = np.load(train_meta_path, allow_pickle=True)
-
-    test_window_size = _meta_int(test_meta, "window_size")
-    test_stride = _meta_int(test_meta, "stride")
-    test_total_len = _meta_int(test_meta, "total_len")
-    test_win_idx = _meta_window_indices(test_meta)
-
-    labels = np.asarray(test_meta["labels"]).astype(int)
-
-    test_phy = _load_raw_array(raw_dir / "test_phy_raw")
-    test_res = _load_raw_array(raw_dir / "test_res_raw")
-    train_phy = _load_raw_array(raw_dir / "train_phy_raw")
-    train_res = _load_raw_array(raw_dir / "train_res_raw")
-
-    test_lengths = [n for n in (
-        test_phy.shape[0] if test_phy is not None else None,
-        test_res.shape[0] if test_res is not None else None,
-    ) if n is not None]
-    if not test_lengths:
-        raise FileNotFoundError(f"No test_phy_raw or test_res_raw found in {raw_dir}")
-    if len(set(test_lengths)) > 1:
-        raise ValueError(
-            f"Mismatched test raw window counts in {raw_dir}: {test_lengths}"
-        )
-
-    train_window_size = _meta_int(train_meta, "window_size")
-    train_stride = _meta_int(train_meta, "stride")
-    train_total_len = _meta_int(train_meta, "total_len")
-    train_win_idx = _meta_window_indices(train_meta)
-
-    train_lengths = [n for n in (
-        train_phy.shape[0] if train_phy is not None else None,
-        train_res.shape[0] if train_res is not None else None,
-    ) if n is not None]
-    if train_lengths and len(set(train_lengths)) > 1:
-        raise ValueError(
-            f"Mismatched train raw window counts in {raw_dir}: {train_lengths}"
-        )
-
-    return {
-        "labels":            labels,
-        "test_phy":          test_phy,
-        "test_res":          test_res,
-        "train_phy":         train_phy,
-        "train_res":         train_res,
-        "test_window_size":  test_window_size,
-        "test_stride":       test_stride,
-        "test_total_len":    test_total_len,
-        "test_window_indices": test_win_idx,
-        "train_window_size": train_window_size,
-        "train_stride":      train_stride,
-        "train_total_len":   train_total_len,
-        "train_window_indices": train_win_idx,
-    }
 
 
 def entity_data_from_raw(
@@ -169,8 +53,6 @@ def entity_data_from_raw(
 
 
 def score_raw_entity(
-    dataset: str,
-    entity_id: str,
     *,
     labels,
     test_phy,
@@ -185,17 +67,8 @@ def score_raw_entity(
     train_total_len,
     test_window_indices=None,
     train_window_indices=None,
-    out_dir: str | Path | None = None,
 ) -> dict[str, float]:
     """Score one entity directly from in-memory raw artifacts."""
-    dataset = str(dataset).upper()
-    entity_id = str(entity_id)
-    if out_dir is None:
-        out_dir = DEFAULT_OUT_ROOT / dataset / entity_id
-
-    out_dir = Path(out_dir).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     entity_data = entity_data_from_raw(
         labels=labels,
         test_phy=test_phy,
@@ -211,15 +84,7 @@ def score_raw_entity(
         test_window_indices=test_window_indices,
         train_window_indices=train_window_indices,
     )
-    m = score_entity(entity_data)
-
-    cfg_fields = [SCALING, MIXING, "none", SMOOTHER, CALIB, PLACEMENT, GRANULARITY]
-    _write_csv(
-        out_dir / f"{dataset.lower()}_entity_metrics.csv",
-        ENTITY_HEADER,
-        [[dataset] + cfg_fields + [entity_id] + [m[k] for k in METRIC_KEYS]],
-    )
-    return m
+    return score_entity(entity_data)
 
 
 def _stitch_feature_scores(
@@ -390,132 +255,3 @@ def _write_csv(path: Path, header: list, rows: list) -> None:
     with open(path, "w", newline="") as f:
         csv.writer(f).writerow(header)
         csv.writer(f).writerows(rows)
-
-
-def score_dataset(
-    dataset: str,
-    scores_root: str | Path,
-    out_dir: str | Path = DEFAULT_OUT_ROOT,
-    entities: list[str] | None = None,
-) -> dict[str, dict[str, float]]:
-    """Score all entities in one dataset and write entity/avg CSVs."""
-    dataset = str(dataset).upper()
-    dataset_dir = Path(scores_root) / dataset
-    entity_dirs = sorted([p for p in dataset_dir.iterdir()
-                          if p.is_dir() and (p / "raw").exists()])
-    if entities:
-        allowed = set(map(str, entities))
-        entity_dirs = [p for p in entity_dirs if p.name in allowed]
-    if not entity_dirs:
-        raise FileNotFoundError(f"No entity raw dirs found under {dataset_dir}")
-
-    out_dir = Path(out_dir).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    all_results: dict[str, dict[str, float]] = {}
-    entity_rows = []
-
-    cfg_fields = [SCALING, MIXING, "none",
-                  SMOOTHER, CALIB,
-                  PLACEMENT, GRANULARITY]
-
-    for entity_dir in entity_dirs:
-        eid = entity_dir.name
-        entity_data = load_entity(entity_dir)
-        m = score_entity(entity_data)
-        all_results[eid] = m
-        entity_rows.append(
-            [dataset] + cfg_fields + [eid] + [m[k] for k in METRIC_KEYS]
-        )
-
-    _write_csv(out_dir / f"{dataset.lower()}_entity_metrics.csv",
-               ENTITY_HEADER, entity_rows)
-
-    # Mean across entity-level metric rows.
-    means = []
-    for k in METRIC_KEYS:
-        vals = [r[k] for r in all_results.values()]
-        means.append(float(np.mean(vals)))
-    _write_csv(out_dir / f"{dataset.lower()}_avg_metrics.csv",
-               SUMMARY_HEADER, [[dataset] + cfg_fields + means])
-
-    return all_results
-
-
-def score_single_entity(
-    dataset: str,
-    entity_id: str,
-    scores_root: str | Path,
-    out_dir: str | Path | None = None,
-) -> dict[str, float]:
-    """Score a single entity from its raw artifact directory."""
-    dataset   = str(dataset).upper()
-    entity_id = str(entity_id)
-    if out_dir is None:
-        out_dir = DEFAULT_OUT_ROOT / dataset / entity_id
-
-    out_dir = Path(out_dir).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    entity_dir = Path(scores_root) / dataset / entity_id
-    if not entity_dir.exists():
-        raise FileNotFoundError(f"Score artifact directory not found: {entity_dir}")
-
-    entity_data = load_entity(entity_dir)
-    m = score_entity(entity_data)
-
-    cfg_fields = [SCALING, MIXING, "none",
-                  SMOOTHER, CALIB,
-                  PLACEMENT, GRANULARITY]
-    _write_csv(
-        out_dir / f"{dataset.lower()}_entity_metrics.csv",
-        ENTITY_HEADER,
-        [[dataset] + cfg_fields + [entity_id] + [m[k] for k in METRIC_KEYS]],
-    )
-
-    return m
-
-
-def run_fixed_generalizable_sweep(
-    datasets,
-    scores_root: str | Path,
-    out_dir: str | Path = DEFAULT_OUT_ROOT,
-    entities=None,
-) -> Path:
-    """Score all requested datasets into one output root."""
-    out_dir = Path(out_dir).resolve()
-    for dataset in datasets:
-        score_dataset(dataset, scores_root, out_dir=out_dir, entities=entities)
-    return out_dir
-
-
-def main() -> None:
-    import argparse
-    parser = argparse.ArgumentParser(
-        description=(
-            f"Score anomaly detections from raw reconstruction artifacts: "
-            f"{SCALING}|{MIXING}|{SMOOTHER}|"
-            f"{CALIB}|{PLACEMENT}|{GRANULARITY}"
-        )
-    )
-    parser.add_argument("--datasets", nargs="+", required=True)
-    parser.add_argument("--entities", nargs="*", default=None)
-    parser.add_argument("--scores-root", required=True)
-    parser.add_argument("--out-dir", default=str(DEFAULT_OUT_ROOT))
-    args = parser.parse_args()
-
-    results = run_fixed_generalizable_sweep(
-        datasets=args.datasets,
-        scores_root=args.scores_root,
-        out_dir=args.out_dir,
-        entities=args.entities,
-    )
-
-    print(f"\nResults written to: {results}")
-    print(f"Scorer config: {SCALING}|{MIXING}|"
-          f"{SMOOTHER}|{CALIB}|{PLACEMENT}|"
-          f"{GRANULARITY}")
-
-
-if __name__ == "__main__":
-    main()

@@ -23,10 +23,6 @@ def get_list_anomaly(labels):
     return results
 
 def get_median_anomaly_length(labels):
-    """
-    Return the median length of the anomalous label segments.
-    Used to set the 2x window for TSB-UAD evaluation.
-    """
     lengths = get_list_anomaly(labels)
     if not lengths:
         return 100
@@ -35,39 +31,26 @@ def get_median_anomaly_length(labels):
 # Metric computation
 
 def calculate_tsb_metrics(scores, labels):
-    """
-    Compute pointwise AUC / PR-AUC and the TSB-UAD summary metrics.
-    """
     scores = np.asarray(scores, dtype=np.float32)
     labels = np.asarray(labels, dtype=np.int32)
-    
-    # Align scores and labels to a shared prefix.
     valid_len = min(len(scores), len(labels))
     scores = scores[:valid_len]
     labels = labels[:valid_len]
 
     if valid_len == 0:
         raise ValueError("scores and labels must be non-empty")
-    
-    # 1. Pointwise metrics
     if np.unique(labels).size < 2:
         raise ValueError("labels must contain both normal and anomalous classes")
     auc = float(roc_auc_score(labels, scores))
     prauc = float(average_precision_score(labels, scores))
-        
-    # Best F1 over the precision-recall curve.
     precision_curve, recall_curve, _ = precision_recall_curve(labels, scores)
     f1_curve = 2 * precision_curve * recall_curve / (precision_curve + recall_curve + 1e-12)
     best_idx = np.argmax(f1_curve)
     p_best, r_best, f1_best = float(precision_curve[best_idx]), float(recall_curve[best_idx]), float(f1_curve[best_idx])
-        
-    # 2. TSB-UAD metrics
     median_len = get_median_anomaly_length(labels)
     sliding_window = 2 * median_len
     
     tsb_out = get_metrics(scores, labels, metric="all", slidingWindow=sliding_window)
-    
-    # Extract the expected keys and guard NaNs.
     v_roc = tsb_out.get("VUS_ROC") or tsb_out.get("vus-roc") or tsb_out.get("vusaucc") or 0.0
     v_pr  = tsb_out.get("VUS_PR") or tsb_out.get("vus-pr") or tsb_out.get("vuspr") or 0.0
     
