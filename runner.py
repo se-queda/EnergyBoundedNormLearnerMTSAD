@@ -16,6 +16,7 @@ import seed_manager
 from train import train_on_machine, load_config, _resolve_data_root
 
 SMAP_SKIP_IDS = {
+
 }
 
 def worker_task(mid, config, perf_path):

@@ -16,19 +16,10 @@ hnn_dt: 0.05 # Time step for symplectic flow
 hnn_feature_dim: 128 # Hidden dimension for HNN MLP
 fno_modes: 8
 
-# --- Physics-Informed Preprocessing (Moved from utils.py) ---
-savgol_len: 11 # Window length for Jerk smoothing
-savgol_poly: 3 # Poly order for Jerk smoothing
-sparsity_factor: 10 # Knot selection for Spline envelopes
-p_tile: 90 # Percentile for FNO masking
-mask_tiers: [95, 90, 85, 80]
-
 # --- Loss Weights & Training ---
 lambda_d: 1.0 # Discriminator loss weight λ1
 lambda_e: 1.0 # Encoder loss weight λ2
 recon_weight: 1.0 # Reconstruction loss weight
-alpha_vpo: 1.0 # Hamiltonian violation penalty
-sentinel_weight: 10.0
 res_adv_weight: 1.0
 jitter_alpha_max: 0.45
 lambda_joint: 1.0

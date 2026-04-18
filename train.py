@@ -8,10 +8,6 @@ import tensorflow as tf
 import traceback
 import time
 from tqdm import tqdm
-import seed_manager  
-from src.trainer import DualAnchorACAETrainer
-from src.models import build_dual_encoder, build_dual_decoder, build_discriminator
-from src.utils import build_tf_datasets
 from src.data_loaders.psmloader import load_psm_windows
 from src.data_loaders.smdloader import load_smd_windows
 from src.data_loaders.smd_compact_loader import load_smd_compact_windows
@@ -111,8 +107,8 @@ def train_on_machine(machine_id, config):
     res_discriminator = build_res_discriminator(input_dim=L // 2)
 
     # 4. Trainer Initialization
-    from src.trainer import DualAnchorACAETrainer
-    trainer = DualAnchorACAETrainer(
+    from src.trainer import EBNL_Trainer
+    trainer = EBNL_Trainer(
         encoder=encoder,
         decoder=decoder,
         discriminator=discriminator,

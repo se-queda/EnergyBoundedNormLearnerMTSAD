@@ -7,7 +7,7 @@ from .losses import encoder_loss, discriminator_loss
 from .masking import mix_features
 namespace = tf.keras
 
-class DualAnchorACAETrainer:
+class EBNL_Trainer:
     def __init__(self, encoder, decoder, discriminator, res_discriminator, config, topology):
         self.encoder = encoder
         self.decoder = decoder
@@ -22,28 +22,20 @@ class DualAnchorACAETrainer:
             )
         self.topo = topology 
 
-        # Hyperparameters from Config
+        # Config initialization
         self.latent_dim = config["latent_dim"]
         self.lr = config["lr"]
-        
-        # Loss Weights from Config
         self.lambda_d = config["lambda_d"]
         self.lambda_e = config["lambda_e"]
         self.recon_weight = config["recon_weight"]
-        self.sentinel_weight = config["sentinel_weight"]
         self.res_adv_weight = config.get("res_adv_weight", 1.0)
         self.jitter_alpha_max = config.get("jitter_alpha_max", 0.45)
         self.lambda_joint = config.get("lambda_joint", 1.0)
-        
-        # Training Control
         self.patience = config["patience"]
         self.batch_size = config["batch_size"]
 
-        # Optimizers (parallel specialists)
         self.hnn_optimizer = namespace.optimizers.Adam(learning_rate=self.lr, clipnorm=1.0)
         self.fno_optimizer = namespace.optimizers.Adam(learning_rate=self.lr, clipnorm=1.0)
-
-        # Metrics
         self.recon_metric = namespace.metrics.Mean(name="recon_mean")
         self.disc_metric = namespace.metrics.Mean(name="disc_mean")
         self.enc_metric = namespace.metrics.Mean(name="enc_mean")
@@ -79,20 +71,9 @@ class DualAnchorACAETrainer:
             else:
                 recon_phy_loss= tf.constant(0.0, dtype=tf.float32)
 
-            # 4. Residual & Sentinel Loss
+            # 4. FNO reconstruction loss
             recon_res_loss = tf.reduce_mean(tf.square(res_windows - recons_res))
-            
-            # Check if dead sensors exist to avoid dtype errors and NaN loss
-            if len(self.topo.res_to_dead_local) > 0:
-                # Explicit cast to int32 prevents the float32 DataType mismatch
-                dead_idx = tf.cast(self.topo.res_to_dead_local, tf.int32)
-                dead_recons = tf.gather(recons_res, dead_idx, axis=-1)
-                sentinel_loss = tf.reduce_mean(tf.square(dead_recons - 0.0))
-            else:
-                # Provide a zero scalar if no dead sensors are present
-                sentinel_loss = tf.constant(0.0)
-            
-            total_recon_loss = recon_phy_loss + recon_res_loss + (self.sentinel_weight * sentinel_loss)
+            total_recon_loss = recon_phy_loss + recon_res_loss
 
             # 5.Adversarial Task (HNN)
             z_pos_all, alpha_all = [], []
@@ -117,7 +98,7 @@ class DualAnchorACAETrainer:
             loss_disc = discriminator_loss(d_out_pos, d_out_neg, alpha_pos, beta_neg)
             loss_enc = encoder_loss(d_out_pos, d_out_neg, beta_neg)
 
-            # 6. Jittered Grid Contrastive Task (Residual FNO)
+            # 6. Jittered Grid Adversarial Task for FNO
             res_adv_loss = tf.constant(0.0, dtype=tf.float32)
             res_disc_loss = tf.constant(0.0, dtype=tf.float32)
             if tf.reduce_sum(self.res_isolate_mask) > 0:
@@ -143,12 +124,10 @@ class DualAnchorACAETrainer:
                          self.lambda_e * loss_enc)
 
             fno_total = (self.recon_weight * recon_res_loss +
-                         self.sentinel_weight * sentinel_loss +
                          self.res_adv_weight * res_adv_loss +
                          res_disc_loss +
                          self.lambda_joint * loss_enc)
 
-        # Optimization (parallel specialists)
         hnn_vars = (
             self.encoder.trainable_variables +
             self.decoder.trainable_variables +
@@ -199,13 +178,10 @@ class DualAnchorACAETrainer:
             if val_ds is not None:
                 val_losses = []
                 for v_phy, v_res in val_ds:
-                    # 1. Forward Pass (No training)
                     v_phy_anchor = v_phy[:, 0, :, :] 
                     v_res_time = self._append_time(v_res)
                     z_s, z_r, _ = self.encoder([v_phy_anchor, v_res_time], training=False)
                     h_phy, h_res = self.decoder([z_s, z_r], training=False)
-                    
-                    # 2. FIXED: Calculate MSE for each branch separately to avoid shape broadcast errors
                     if self.topo.idx_phy.shape[0] > 0:
                         mse_phy = tf.reduce_mean(tf.square(v_phy_anchor - h_phy))
                     else:
@@ -215,8 +191,6 @@ class DualAnchorACAETrainer:
                         mse_res = tf.reduce_mean(tf.square(v_res - h_res))
                     else:
                         mse_res = tf.constant(0.0, dtype=tf.float32)
-                    
-                    # 3. Add the scalars together
                     val_losses.append((mse_phy + mse_res).numpy())
                 
                 current_val_loss = float(np.mean(val_losses))
@@ -227,7 +201,7 @@ class DualAnchorACAETrainer:
                 else:
                     wait += 1
                     if wait >= self.patience:
-                        print(f"🛑 Early stopping at epoch {epoch+1}")
+                        print(f"Early stopping at epoch {epoch+1}")
                         converge_time = time.perf_counter() - start_time
                         break
             epoch_times.append(time.perf_counter() - epoch_start)
@@ -247,11 +221,7 @@ class DualAnchorACAETrainer:
         print("🔍 Generating Point-wise Reconstructions...")
         phy_views = tf.cast(test_final['phy'], tf.float32) 
         res_data  = tf.cast(test_final['res'], tf.float32)
-        
-        # Determine anchor
         phy_anchor = phy_views[:, 0, :, :] if len(phy_views.shape) == 4 else phy_views
-
-        # Batched inference to prevent GPU OOM
         z_sys_list, z_res_list = [], []
         for i in range(0, len(phy_anchor), batch_size):
             p_batch = phy_anchor[i:i+batch_size]
@@ -263,8 +233,6 @@ class DualAnchorACAETrainer:
         
         z_sys = tf.concat(z_sys_list, axis=0)
         z_res = tf.concat(z_res_list, axis=0)
-        
-        # Batched decoding
         phy_hat_list, res_hat_list = [], []
         for i in range(0, len(z_sys), batch_size):
             ph, rh = self.decoder([z_sys[i:i+batch_size], z_res[i:i+batch_size]], training=False)
