@@ -2,9 +2,13 @@ import yaml
 import os
 import numpy as np
 import gc
+import time
 from tensorflow.keras import backend as K
 import tensorflow as tf
 from tqdm import tqdm
+from diagnosis import compute_diagnosis_metrics
+from inference import summarize_inference
+from parameter import summarize_parameters
 from src.data_loaders.psmloader import load_psm_windows
 from src.data_loaders.smdloader import load_smd_windows
 from src.data_loaders.smd_compact_loader import load_smd_compact_windows
@@ -67,6 +71,7 @@ def train_on_machine(machine_id, config):
     topo = train_final['topology']
     phy_dim = len(topo.idx_phy)
     res_dim = len(topo.idx_res)
+    
     total_sensors = len(topo.idx_phy) + len(topo.idx_res)
     base_patience = int(config.get("patience", 10))
     if len(topo.res_to_dead_local) == total_sensors and total_sensors > 0:
@@ -74,9 +79,10 @@ def train_on_machine(machine_id, config):
         current_patience = 100 
         print(f"All Sensors Dead. Setting High Patience ({current_patience})")
     else:
-        # Healthy Machine: low patience prevents overfitting
+        # Healthy Machine low patience prevents overfitting
         current_patience = base_patience
-        print(f" Setting Standard Patience ({current_patience})")
+        print(f"Setting Standard Patience ({current_patience})")
+        
     # 2. Build Datasets
     from src.utils import build_tf_datasets
     train_ds, val_ds, _, train_idx, val_idx = build_tf_datasets(
@@ -106,6 +112,7 @@ def train_on_machine(machine_id, config):
         config={**config, "patience": current_patience},
         topology=topo,
     )
+    parameter_stats = summarize_parameters(encoder, decoder, discriminator, res_discriminator)
     
     # Training with Early Stopping
     train_stats = trainer.fit(train_ds, val_ds=val_ds, epochs=EP)
@@ -116,9 +123,12 @@ def train_on_machine(machine_id, config):
     trainer.encoder.save_weights(f"{save_path}/encoder.weights.h5")
     trainer.decoder.save_weights(f"{save_path}/decoder.weights.h5")
     # 5. Save raw reconstruction artifacts
+    inference_start = time.perf_counter()
     recons = trainer.reconstruct(test_final, batch_size=TEST_BS)
+    inference_elapsed = time.perf_counter() - inference_start
     actual_len = (recons['res_orig'].shape[0] - 1) * test_stride + W
     res_orig, res_hat = recons['res_orig'], recons['res_hat']
+    inference_stats = summarize_inference(inference_elapsed, actual_len)
 
     def _compute_train_raw_artifacts():
         if train_idx is None or len(train_idx) == 0 or "phy_anchor" not in train_final or "res_orig" not in train_final:
@@ -239,12 +249,36 @@ def train_on_machine(machine_id, config):
     aff_p = float(scored["aff_p"])
     aff_r = float(scored["aff_r"])
     aff1 = float(scored["aff1"])
+    diagnosis_stats = compute_diagnosis_metrics(
+        dataset=dataset_type,
+        data_root=data_root,
+        entity_id=str(machine_id),
+        topology=topo,
+        test_phy=test_phy_raw,
+        test_res=test_res_raw,
+        train_phy=train_phy_raw,
+        train_res=train_res_raw,
+        test_window_size=W,
+        test_stride=test_stride,
+        test_total_len=actual_len,
+        train_window_size=W,
+        train_stride=stride,
+        train_total_len=train_total_len,
+        test_window_indices=None,
+        train_window_indices=train_idx_shifted,
+    )
     print(f"[RESULTS] AUC: {auc_score:.4f} | PR-AUC: {pr_auc_score:.4f} | P: {p_best:.4f} | R: {r_best:.4f} | F1: {f1_best:.4f} | vusauc: {vusauc:.4f} | vuspr: {vuspr:.4f} | aff_p: {aff_p:.4f} | aff_r: {aff_r:.4f} | aff1: {aff1:.4f}")
+    print(
+        f"[INFERENCE] Elapsed time: {inference_stats['elapsed_minutes']:.4f} mins | "
+        f"Inference per sample: {inference_stats['ms_per_sample']:.4f} ms"
+    )
+    print(f"[PARAMS] Num. of params: {parameter_stats['total_params']}")
     K.clear_session()
 
     gc.collect()
 
     return (
         auc_score, pr_auc_score, p_best, r_best, f1_best, vusauc, vuspr, aff_p, aff_r, aff1,
-        train_stats, (encoder, decoder, discriminator, res_discriminator)
+        train_stats, inference_stats, diagnosis_stats, parameter_stats,
+        (encoder, decoder, discriminator, res_discriminator)
     )

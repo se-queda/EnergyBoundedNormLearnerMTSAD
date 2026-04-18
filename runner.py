@@ -23,15 +23,14 @@ def worker_task(mid, config, perf_path):
         parent = os.path.dirname(perf_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-
-        # GPU Setup
         gpus = tf.config.experimental.list_physical_devices('GPU')
         if gpus:
             for gpu in gpus:
                 tf.config.experimental.set_memory_growth(gpu, True)
-
-        # Run Training & Scoring
-        auc, pr_auc, p_best, r_best, f1_best, vusauc, vuspr, aff_p, aff_r, aff1, train_stats, models = train_on_machine(mid, config)
+        auc, pr_auc, p_best, r_best, f1_best, vusauc, vuspr, aff_p, aff_r, aff1, train_stats, inference_stats, diagnosis_stats, parameter_stats, models = train_on_machine(mid, config)
+        inf_path = os.path.join(os.path.dirname(perf_path), "inference.csv")
+        diag_path = os.path.join(os.path.dirname(perf_path), "diagnosis.csv")
+        param_path = os.path.join(os.path.dirname(perf_path), "parameter.csv")
         
         def _ensure_header(path, header):
             if not os.path.isfile(path):
@@ -54,8 +53,6 @@ def worker_task(mid, config, perf_path):
                     pass
                 with open(path, "w", newline="") as f:
                     csv.writer(f).writerow(header)
-
-        # Save performance metrics
         perf_header = ["id", "auc", "prauc", "p_best", "r_best", "f1_best", "vusaucc", "vuspr", "aff_p", "aff_r", "aff1"]
         _ensure_header(perf_path, perf_header)
         with open(perf_path, "a", newline="") as f:
@@ -75,6 +72,45 @@ def worker_task(mid, config, perf_path):
             ])
         _compute_and_append_avg(perf_path)
 
+        inf_header = ["id", "elapsed_minutes", "ms_per_sample"]
+        _ensure_header(inf_path, inf_header)
+        with open(inf_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                mid,
+                f"{inference_stats['elapsed_minutes']:.6f}",
+                f"{inference_stats['ms_per_sample']:.6f}",
+            ])
+        _compute_and_append_avg(inf_path)
+
+        if diagnosis_stats is not None:
+            diag_header = ["id", "hr_100", "hr_150", "ndcg_100", "ndcg_150", "ips_100", "ips_150"]
+            _ensure_header(diag_path, diag_header)
+            with open(diag_path, "a", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    mid,
+                    f"{diagnosis_stats['hr_100']:.6f}",
+                    f"{diagnosis_stats['hr_150']:.6f}",
+                    f"{diagnosis_stats['ndcg_100']:.6f}",
+                    f"{diagnosis_stats['ndcg_150']:.6f}",
+                    f"{diagnosis_stats['ips_100']:.6f}",
+                    f"{diagnosis_stats['ips_150']:.6f}",
+                ])
+            _compute_and_append_avg(diag_path)
+
+        param_header = ["id", "total_params", "trainable_params", "non_trainable_params"]
+        _ensure_header(param_path, param_header)
+        with open(param_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                mid,
+                str(parameter_stats["total_params"]),
+                str(parameter_stats["trainable_params"]),
+                str(parameter_stats["non_trainable_params"]),
+            ])
+        _compute_and_append_avg(param_path)
+
     except Exception as e:
         print(f" Failed on {mid}: {e}")
         traceback.print_exc()
@@ -93,7 +129,6 @@ def _compute_and_append_avg(csv_path):
         rows = list(csv.reader(f))
     if len(rows) < 2:
         return
-    # Drop any previously appended AVG rows anywhere in the file
     rows = [r for r in rows if not (r and r[0].strip().upper() == "AVG")]
     header = rows[0]
     data_rows = rows[1:]
@@ -119,8 +154,6 @@ def run_all_entities(config, out_dir):
     data_root = _resolve_data_root(config, dataset_type)
     if not data_root:
         raise ValueError(f"data_root not set for dataset {dataset_type}")
-    
-    # --- 1. ID Discovery ---
     if dataset_type == "PSM":
         machine_ids = ["PSM_Pooled"]
     elif dataset_type == "SMD" and config.get("smd_compact", False):
@@ -128,14 +161,12 @@ def run_all_entities(config, out_dir):
     # elif dataset_type == "SWAT":
     #     machine_ids = ["SWAT"]
     else:
-        # Determine file extension based on dataset
         ext = ".txt" if dataset_type == "SMD" else ".npy"
         train_path = os.path.join(data_root, "train")
         
         if not os.path.exists(train_path):
             raise FileNotFoundError(f"Could not find train folder at {train_path}")
             
-        # Get all IDs (filenames without extension)
         machine_ids = sorted([f.replace(ext, "") for f in os.listdir(train_path) if f.endswith(ext)])
     
     if dataset_type == "SMAP":
@@ -261,7 +292,7 @@ def main():
             mid = defaults.get(dataset_type, "test_entity")
             if dataset_type == "SMD" and config.get("smd_compact", False):
                 mid = "SMD_Compact"
-        print(f"🧪 Starting single-entity test run: {mid}")
+        print(f"starting single-entity test run: {mid}")
         csv_path = f"results/{dataset_type}_performance_metrics.csv"
         worker_task(mid, config, csv_path)
         _compute_and_append_avg(csv_path)

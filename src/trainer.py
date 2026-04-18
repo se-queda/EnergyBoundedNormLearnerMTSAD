@@ -55,7 +55,6 @@ class EBNL_Trainer:
 
     @tf.function
     def _train_step(self, phy_packed, res_windows):
-        # 1. Unpack Physics Views
         anchor_phy = phy_packed[:, 0, :, :]        
         aug_views_phy = phy_packed[:, 1:5, :, :] 
         
@@ -65,7 +64,7 @@ class EBNL_Trainer:
             z_sys, z_res, _ = self.encoder([anchor_phy, res_with_time], training=True)
             recons_phy, recons_res = self.decoder([z_sys, z_res], training=True)
             
-            # 3. Physics Loss (Hamiltonian Branch)
+            # 3. HNN Reconstruction Loss
             if self.topo.idx_phy.shape[0] > 0:
                 recon_phy_loss = tf.reduce_mean(tf.square(anchor_phy - recons_phy))
             else:

@@ -5,15 +5,10 @@ import tensorflow as tf
 
 
 def initialize_seeds(seed=42):
-    # 1. Set Python core seeds
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
-
-    # 2. Set TensorFlow seeds
     tf.random.set_seed(seed)
-
-    # 3. Force determinism for TF/Keras
     os.environ["TF_DETERMINISTIC_OPS"] = "1"
     os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 
@@ -44,9 +39,6 @@ def _next_suite_seed(seeds, index_path="results/suite_seed_index.txt"):
     except Exception:
         pass
     return seed
-
-
-# Initialize once globally when the module is imported
 suite_seeds = _load_suite_seeds()
 env_seed = os.environ.get("SUITE_SEED")
 if env_seed is not None:

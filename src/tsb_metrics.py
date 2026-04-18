@@ -3,8 +3,6 @@ import math
 from sklearn.metrics import roc_auc_score, average_precision_score, precision_recall_curve
 from TSB_UAD.vus.metrics import get_metrics
 
-# Segment utilities
-
 def get_list_anomaly(labels):
     results = []
     start = 0
@@ -27,8 +25,6 @@ def get_median_anomaly_length(labels):
     if not lengths:
         return 100
     return int(np.median(lengths))
-
-# Metric computation
 
 def calculate_tsb_metrics(scores, labels):
     scores = np.asarray(scores, dtype=np.float32)

@@ -249,9 +249,3 @@ def _compute_metrics(scores: np.ndarray, labels: np.ndarray) -> dict[str, float]
         "aff1":    float(out["aff1"]),
     }
 
-
-def _write_csv(path: Path, header: list, rows: list) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", newline="") as f:
-        csv.writer(f).writerow(header)
-        csv.writer(f).writerows(rows)
