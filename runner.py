@@ -1,5 +1,4 @@
 import argparse
-import subprocess
 import sys
 import csv
 import gc
@@ -17,56 +16,6 @@ import seed_manager
 from train import train_on_machine, load_config, _resolve_data_root
 
 SMAP_SKIP_IDS = {
-    'A-1',
-    'A-2',
-    'A-3',
-    'A-4',
-    'A-5',
-    'A-6',
-    'A-7',
-    'A-8',
-    'A-9',
-    'B-1',
-    'D-1',
-    'D-11',
-    'D-12',
-    'D-13',
-    'D-2',
-    'D-3',
-    'D-4',
-    'D-5',
-    'D-6',
-    'D-7',
-    'D-8',
-    'D-9',
-    'E-1',
-    'E-10',
-    'E-11',
-    'E-12',
-    'E-13',
-    'E-2',
-    'E-3',
-    'E-4',
-    'E-5',
-    'E-6',
-    'E-7',
-    'E-8',
-    'E-9',
-    'F-1',
-    'F-2',
-    'F-3',
-    'G-1',
-    'G-2',
-    'G-3',
-    'G-4',
-    'G-6',
-    'G-7',
-    'P-1',
-    'P-2',
-    'P-3',
-    'P-4',
-    'P-7',
-    'R-1',
 }
 
 SMD_SKIP_IDS = {
@@ -96,13 +45,12 @@ SMD_SKIP_IDS = {
     'machine-3-5',
 }
 
-def worker_task(mid, config, perf_path, comp_path, infer_path):
+def worker_task(mid, config, perf_path):
     """Child process executor with clean TF initialization."""
     try:
-        for p in (perf_path, comp_path, infer_path):
-            parent = os.path.dirname(p)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
+        parent = os.path.dirname(perf_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
 
         # GPU Setup
         gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -111,7 +59,7 @@ def worker_task(mid, config, perf_path, comp_path, infer_path):
                 tf.config.experimental.set_memory_growth(gpu, True)
 
         # Run Training & Scoring
-        auc, pr_auc, p_best, r_best, f1_best, vusauc, vuspr, aff_p, aff_r, aff1, train_stats, models, num_samples, inference_stats = train_on_machine(mid, config)
+        auc, pr_auc, p_best, r_best, f1_best, vusauc, vuspr, aff_p, aff_r, aff1, train_stats, models = train_on_machine(mid, config)
         
         def _ensure_header(path, header):
             if not os.path.isfile(path):
@@ -155,86 +103,6 @@ def worker_task(mid, config, perf_path, comp_path, infer_path):
             ])
         _compute_and_append_avg(perf_path)
 
-        # Save computation metrics
-        comp_header = [
-            "id",
-            "total_params",
-            "peak_vram_mb",
-            "approx_tflops_per_epoch",
-            "avg_gpu_util_percent",
-            "avg_mem_util_percent",
-            "avg_power_w",
-            "energy_wh",
-            "energy_wh_total",
-            "sec_per_epoch",
-            "total_time_converge",
-        ]
-        _ensure_header(comp_path, comp_header)
-
-        total_params = 0
-        for m in models:
-            total_params += int(np.sum([np.prod(v.shape) for v in m.trainable_variables]))
-
-        steps_per_epoch = int(np.ceil(num_samples / config.get("batch_size", 128)))
-        approx_tflops_per_epoch = (2.0 * total_params * steps_per_epoch) / 1e12
-        sec_per_epoch = float(np.mean(train_stats["epoch_times"])) if train_stats["epoch_times"] else 0.0
-        avg_gpu_util = train_stats.get("avg_gpu_util", float("nan"))
-        avg_mem_util = train_stats.get("avg_mem_util", float("nan"))
-        avg_power_w = train_stats.get("avg_power_w", float("nan"))
-        energy_wh = train_stats.get("energy_wh", float("nan"))
-        total_time = train_stats.get("total_time", float("nan"))
-        energy_wh_total = avg_power_w * (total_time / 3600.0) if not np.isnan(avg_power_w) else float("nan")
-
-        peak_vram_mb = float("nan")
-        try:
-            info = tf.config.experimental.get_memory_info("GPU:0")
-            peak_vram_mb = info["peak"] / (1024 * 1024)
-        except Exception:
-            pass
-
-        with open(comp_path, "a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                mid,
-                f"{total_params}",
-                f"{peak_vram_mb:.2f}",
-                f"{approx_tflops_per_epoch:.6f}",
-                f"{avg_gpu_util:.2f}",
-                f"{avg_mem_util:.2f}",
-                f"{avg_power_w:.2f}",
-                f"{energy_wh:.4f}",
-                f"{energy_wh_total:.4f}",
-                f"{sec_per_epoch:.4f}",
-                f"{train_stats['converge_time']:.4f}",
-            ])
-        _compute_and_append_avg(comp_path)
-
-        infer_header = [
-            "id",
-            "avg_fwd_s",
-            "p99_fwd_s",
-            "avg_window_s",
-            "p99_window_s",
-            "throughput_windows_per_s",
-            "per_point_ms",
-            "per_point_fwd_ms",
-        ]
-        _ensure_header(infer_path, infer_header)
-        if inference_stats is not None:
-            with open(infer_path, "a", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    mid,
-                    f"{inference_stats['avg_fwd_s']:.6f}",
-                    f"{inference_stats['p99_fwd_s']:.6f}",
-                    f"{inference_stats['avg_window_s']:.6f}",
-                    f"{inference_stats['p99_window_s']:.6f}",
-                    f"{inference_stats['throughput_windows_per_s']:.2f}",
-                    f"{inference_stats['per_point_ms']:.4f}",
-                    f"{inference_stats['per_point_fwd_ms']:.4f}",
-                ])
-            _compute_and_append_avg(infer_path)
-            
     except Exception as e:
         print(f"❌ Failed on {mid}: {e}")
         traceback.print_exc()
@@ -282,6 +150,8 @@ def run_all_entities(config, out_dir):
     # --- 1. ID Discovery ---
     if dataset_type == "PSM":
         machine_ids = ["PSM_Pooled"]
+    elif dataset_type == "SMD" and config.get("smd_compact", False):
+        machine_ids = ["SMD_Compact"]
     # elif dataset_type == "SWAT":
     #     machine_ids = ["SWAT"]
     else:
@@ -310,15 +180,11 @@ def run_all_entities(config, out_dir):
 
     os.makedirs(out_dir, exist_ok=True)
     perf_path = os.path.join(out_dir, "performance.csv")
-    comp_path = os.path.join(out_dir, "computation.csv")
-    infer_path = os.path.join(out_dir, "inference.csv")
     # Serial execution: one entity at a time, no multiprocessing.
     for mid in machine_ids:
-        worker_task(mid, config, perf_path, comp_path, infer_path)
+        worker_task(mid, config, perf_path)
 
     _compute_and_append_avg(perf_path)
-    _compute_and_append_avg(comp_path)
-    _compute_and_append_avg(infer_path)
 
 
 def _get_data_root_for_dataset(config, dataset):
@@ -364,10 +230,6 @@ def _write_final_results(dataset, seed_avgs):
         writer.writerow(["STD"] + [f"{x:.6f}" for x in std_vals])
 
 
-def _run_dataset_process(dataset, cfg, seed_dir):
-    run_all_entities(cfg, seed_dir)
-
-
 def _serial_schedule(config, seed_label):
     datasets = ["MSL", "SMAP", "SMD"]
     for dataset in datasets:
@@ -379,40 +241,7 @@ def _serial_schedule(config, seed_label):
         run_all_entities(cfg, out_dir)
 
 
-def _parallel_schedule(config, seed_label):
-    ctx = mp.get_context("spawn")
-    procs = {}
-
-    def start_dataset(ds):
-        cfg = _dataset_cfg(config, ds)
-        if not cfg.get("data_root"):
-            return None
-        out_dir = os.path.join("results", ds, seed_label)
-        os.makedirs(out_dir, exist_ok=True)
-        p = ctx.Process(target=_run_dataset_process, args=(ds, cfg, out_dir))
-        p.start()
-        return p
-
-    p_smd = start_dataset("SMD")
-    p_smap = start_dataset("SMAP")
-    p_msl = start_dataset("MSL")
-
-    if p_smap:
-        p_smap.join()
-    if p_msl:
-        p_msl.join()
-
-    p_psm = start_dataset("PSM")
-
-    if p_smd:
-        p_smd.join()
-    if p_psm:
-        p_psm.join()
-
-    # SWAT excluded from training pipeline
-
-
-def run_suite(config, seeds, parallel=False):
+def run_suite(config, seeds):
     datasets = ["SMD", "SMAP", "MSL", "PSM"]
     seed_avgs_by_dataset = {d: [] for d in datasets}
 
@@ -425,16 +254,13 @@ def run_suite(config, seeds, parallel=False):
         seed_manager.initialize_seeds(int(s))
         seed_label = f"seed_{s}"
 
-        if parallel:
-            _parallel_schedule(config, seed_label)
-        else:
-            for dataset in datasets:
-                cfg = _dataset_cfg(config, dataset)
-                if not cfg.get("data_root"):
-                    continue
-                out_dir = os.path.join("results", dataset, seed_label)
-                os.makedirs(out_dir, exist_ok=True)
-                run_all_entities(cfg, out_dir)
+        for dataset in datasets:
+            cfg = _dataset_cfg(config, dataset)
+            if not cfg.get("data_root"):
+                continue
+            out_dir = os.path.join("results", dataset, seed_label)
+            os.makedirs(out_dir, exist_ok=True)
+            run_all_entities(cfg, out_dir)
 
         for dataset in datasets:
             perf_path = os.path.join("results", dataset, seed_label, "performance.csv")
@@ -443,13 +269,13 @@ def run_suite(config, seeds, parallel=False):
     for dataset in datasets:
         _write_final_results(dataset, seed_avgs_by_dataset[dataset])
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="config.yaml")
     parser.add_argument("--suite", action="store_true", help="Run all datasets for N seeds")
     parser.add_argument("--all", action="store_true", help="Run all datasets once (seed_single)")
     parser.add_argument("--seeds", type=int, default=5, help="Number of seeds for suite runs")
-    parser.add_argument("--parallel", action="store_true", help="Use parallel dataset schedule")
     parser.add_argument("--serial", action="store_true", help="With --all, run MSL/SMAP/SMD serially into seed_single dirs")
     # Optional override for quick testing
     parser.add_argument("--id", type=str, help="Specify a single machine/channel ID to test")
@@ -470,7 +296,7 @@ def main():
             seeds = rng.integers(0, 1_000_000, size=args.seeds).tolist()
             with open(seeds_path, "w") as f:
                 f.write(",".join(str(s) for s in seeds))
-        run_suite(config, seeds, parallel=args.parallel)
+        run_suite(config, seeds)
         return
 
     if args.all:
@@ -486,9 +312,6 @@ def main():
         run_all_entities(cfg, out_dir)
         return
 
-    if args.parallel:
-        _parallel_schedule(config, "seed_single")
-        return
     else:
         # Logic for a single-point test run
         if args.id:
@@ -497,30 +320,12 @@ def main():
             # Smart defaults for single runs based on dataset
             defaults = {"SMD": "machine-1-1", "MSL": "T-10", "SMAP": "D-12", "PSM": "PSM_Pooled"}
             mid = defaults.get(dataset_type, "test_entity")
+            if dataset_type == "SMD" and config.get("smd_compact", False):
+                mid = "SMD_Compact"
         print(f"🧪 Starting single-entity test run: {mid}")
         csv_path = f"results/{dataset_type}_performance_metrics.csv"
-        ctx = mp.get_context("spawn")
-        p = ctx.Process(
-            target=worker_task,
-            args=(
-                mid,
-                config,
-                csv_path,
-                f"results/{dataset_type}_computation_metrics.csv",
-                f"results/{dataset_type}_inference.csv",
-            ),
-        )
-        p.start()
-        p.join()
-        if p.exitcode != 0:
-            if p.exitcode < 0:
-                print(f"❌ Worker for {mid} terminated by signal {-p.exitcode}. Likely OOM or a fatal TF error.")
-            else:
-                print(f"❌ Worker for {mid} exited with code {p.exitcode}.")
-        p.close()
+        worker_task(mid, config, csv_path)
         _compute_and_append_avg(csv_path)
-        _compute_and_append_avg(f"results/{dataset_type}_computation_metrics.csv")
-        _compute_and_append_avg(f"results/{dataset_type}_inference.csv")
 
     # Clean legacy score dumps
     try:

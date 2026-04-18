@@ -14,10 +14,11 @@ from src.models import build_dual_encoder, build_dual_decoder, build_discriminat
 from src.utils import build_tf_datasets
 from src.data_loaders.psmloader import load_psm_windows
 from src.data_loaders.smdloader import load_smd_windows
+from src.data_loaders.smd_compact_loader import load_smd_compact_windows
 from src.data_loaders.smaploader import load_smap_windows
 from src.data_loaders.msloader import load_msl_windows
 from src.data_loaders.swatloader import load_swat_windows
-from scripts.generalized_anomaly_scorer import score_single_entity
+from scripts.generalized_anomaly_scorer import score_raw_entity
 # from src.data_loaders.swatloader import load_swat_windows
 
 
@@ -69,8 +70,11 @@ def train_on_machine(machine_id, config):
         train_final, test_final, test_labels, _, _ = load_msl_windows(data_root, machine_id, config)
     elif dataset_type == "SWAT":
           train_final, test_final, test_labels, _, _ = load_swat_windows(data_root, config)
-    else: 
-        train_final, test_final, test_labels, _, _ = load_smd_windows(data_root, machine_id, config)
+    else:
+        if config.get("smd_compact", False):
+            train_final, test_final, test_labels, _, _ = load_smd_compact_windows(data_root, config)
+        else:
+            train_final, test_final, test_labels, _, _ = load_smd_windows(data_root, machine_id, config)
     
     topo = train_final['topology']
     phy_dim = len(topo.idx_phy)
@@ -163,21 +167,27 @@ def train_on_machine(machine_id, config):
     
     print(f"🏁 [FINAL SYNC] Raw windows stitched to {actual_len} points | Labels: {len(test_labels)} | Anomaly Rate: {np.mean(test_labels):.2%}")
 
-    scores_root = "scores"
-    suite_seed = os.environ.get("SUITE_SEED")
-    save_scores = True
-    if suite_seed:
-        save_scores = os.environ.get("SUITE_SAVE_SCORES", "0") == "1"
-    scores_dir = os.path.join(scores_root, dataset_type, str(machine_id))
-    os.makedirs(scores_dir, exist_ok=True)
+    test_phy_raw = None
+    test_res_raw = None
+    if phy_dim > 0:
+        test_phy_raw = np.square(recons["phy_orig"] - recons["phy_hat"])
+    if res_orig.shape[-1] > 0:
+        test_res_raw = np.square(res_orig - res_hat)
 
-    def _save_raw_feature_scores(out_dir, split, phy_err, res_err, window_indices, total_len, stride, window_size, labels=None):
+    train_phy_raw = None
+    train_res_raw = None
+    if train_recons is not None and phy_dim > 0:
+        train_phy_raw = np.square(train_recons["phy_orig"] - train_recons["phy_hat"])
+    if train_recons is not None and train_recons["res_orig"].shape[-1] > 0:
+        train_res_raw = np.square(train_recons["res_orig"] - train_recons["res_hat"])
+
+    def _save_raw_feature_scores(out_dir, split, phy_err, res_err, window_indices, total_len, stride_val, window_size, labels=None):
         os.makedirs(out_dir, exist_ok=True)
         np.savez_compressed(
             os.path.join(out_dir, f"{split}_meta.npz"),
             window_indices=np.asarray(window_indices) if window_indices is not None else None,
             total_len=int(total_len),
-            stride=int(stride),
+            stride=int(stride_val),
             window_size=int(window_size),
             labels=np.asarray(labels) if labels is not None else None,
         )
@@ -192,50 +202,31 @@ def train_on_machine(machine_id, config):
                 err=np.asarray(res_err),
             )
 
-    # Raw reconstruction score tensors for the current endpoint-causal scorer.
-    try:
-        if save_scores:
-            raw_dir = os.path.join(scores_dir, "raw")
-            os.makedirs(raw_dir, exist_ok=True)
-
-            phy_raw = None
-            res_raw = None
-            if phy_dim > 0:
-                phy_raw = np.square(recons["phy_orig"] - recons["phy_hat"])
-            if res_orig.shape[-1] > 0:
-                res_raw = np.square(res_orig - res_hat)
-            _save_raw_feature_scores(
-                raw_dir,
-                "test",
-                phy_raw,
-                res_raw,
-                None,
-                actual_len,
-                test_stride,
-                W,
-                labels=test_labels,
-            )
-
-            if train_recons is not None:
-                train_phy_raw = None
-                train_res_raw = None
-                if phy_dim > 0:
-                    train_phy_raw = np.square(train_recons["phy_orig"] - train_recons["phy_hat"])
-                if train_recons["res_orig"].shape[-1] > 0:
-                    train_res_raw = np.square(train_recons["res_orig"] - train_recons["res_hat"])
-                _save_raw_feature_scores(
-                    raw_dir,
-                    "train",
-                    train_phy_raw,
-                    train_res_raw,
-                    train_idx_shifted,
-                    train_total_len,
-                    stride,
-                    W,
-                    labels=None,
-                )
-    except Exception:
-        pass
+    if config.get("saved_score", False):
+        scores_dir = os.path.join("scores", dataset_type, str(machine_id), "raw")
+        os.makedirs(scores_dir, exist_ok=True)
+        _save_raw_feature_scores(
+            scores_dir,
+            "test",
+            test_phy_raw,
+            test_res_raw,
+            None,
+            actual_len,
+            test_stride,
+            W,
+            labels=test_labels,
+        )
+        _save_raw_feature_scores(
+            scores_dir,
+            "train",
+            train_phy_raw,
+            train_res_raw,
+            train_idx_shifted,
+            train_total_len,
+            stride,
+            W,
+            labels=None,
+        )
 
     score_out_dir = os.path.join(
         "posthoc_runs",
@@ -243,10 +234,22 @@ def train_on_machine(machine_id, config):
         str(machine_id),
         "generalized_anomaly_scorer",
     )
-    scored = score_single_entity(
+    scored = score_raw_entity(
         dataset=dataset_type,
         entity_id=machine_id,
-        scores_root=scores_root,
+        labels=test_labels,
+        test_phy=test_phy_raw,
+        test_res=test_res_raw,
+        train_phy=train_phy_raw,
+        train_res=train_res_raw,
+        test_window_size=W,
+        test_stride=test_stride,
+        test_total_len=actual_len,
+        train_window_size=W,
+        train_stride=stride,
+        train_total_len=train_total_len,
+        test_window_indices=None,
+        train_window_indices=train_idx_shifted,
         out_dir=score_out_dir,
     )
 
@@ -265,11 +268,7 @@ def train_on_machine(machine_id, config):
 
     gc.collect()
 
-    from benchmark import measure_inference
-    inference_stats = measure_inference(trainer, test_final, batch_size=TEST_BS, window_size=W)
-
     return (
         auc_score, pr_auc_score, p_best, r_best, f1_best, vusauc, vuspr, aff_p, aff_r, aff1,
-        train_stats, (encoder, decoder, discriminator, res_discriminator),
-        len(train_final["phy_views"]), inference_stats
+        train_stats, (encoder, decoder, discriminator, res_discriminator)
     )

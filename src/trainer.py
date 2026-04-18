@@ -1,39 +1,10 @@
 import tensorflow as tf
 import time
-import subprocess
 from tqdm import tqdm
 import numpy as np
 from types import SimpleNamespace
 from .losses import encoder_loss, discriminator_loss
 from .masking import mix_features
-try:
-    import pynvml
-except Exception:
-    pynvml = None
-
-
-def _read_nvidia_smi():
-    try:
-        out = subprocess.check_output(
-            [
-                "nvidia-smi",
-                "--query-gpu=utilization.gpu,utilization.memory,power.draw",
-                "--format=csv,noheader,nounits",
-            ],
-            stderr=subprocess.DEVNULL,
-        ).decode("utf-8").strip()
-        if not out:
-            return None
-        parts = [p.strip() for p in out.split(",")]
-        if len(parts) < 3:
-            return None
-        gpu_util = float(parts[0])
-        mem_util = float(parts[1])
-        power_w = float(parts[2])
-        return gpu_util, mem_util, power_w
-    except Exception:
-        return None
-
 # Preferred persona namespace
 namespace = tf.keras
 
@@ -210,17 +181,6 @@ class DualAnchorACAETrainer:
         epoch_times = []
         start_time = time.perf_counter()
         converge_time = None
-        gpu_util_samples = []
-        mem_util_samples = []
-        power_samples_w = []
-
-        nvml_handle = None
-        if pynvml is not None:
-            try:
-                pynvml.nvmlInit()
-                nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-            except Exception:
-                nvml_handle = None
         
         for epoch in range(epochs):
             epoch_start = time.perf_counter()
@@ -235,22 +195,6 @@ class DualAnchorACAETrainer:
                 self.disc_metric.update_state(d_loss)
                 self.enc_metric.update_state(e_loss)
 
-                if nvml_handle is not None:
-                    try:
-                        util = pynvml.nvmlDeviceGetUtilizationRates(nvml_handle)
-                        gpu_util_samples.append(float(util.gpu))
-                        mem_util_samples.append(float(util.memory))
-                        power_mw = pynvml.nvmlDeviceGetPowerUsage(nvml_handle)
-                        power_samples_w.append(float(power_mw) / 1000.0)
-                    except Exception:
-                        pass
-                else:
-                    smi = _read_nvidia_smi()
-                    if smi is not None:
-                        gpu_util, mem_util, power_w = smi
-                        gpu_util_samples.append(float(gpu_util))
-                        mem_util_samples.append(float(mem_util))
-                        power_samples_w.append(float(power_w))
                 
                 bar.set_postfix({"Recon": f"{r_loss:.4f}", "Disc": f"{d_loss:.4f}"})
 
@@ -294,20 +238,11 @@ class DualAnchorACAETrainer:
         if converge_time is None:
             converge_time = total_time
 
-        avg_gpu_util = float(np.mean(gpu_util_samples)) if gpu_util_samples else float("nan")
-        avg_mem_util = float(np.mean(mem_util_samples)) if mem_util_samples else float("nan")
-        avg_power_w = float(np.mean(power_samples_w)) if power_samples_w else float("nan")
-        energy_wh = avg_power_w * (total_time / 3600.0) if not np.isnan(avg_power_w) else float("nan")
-
         return {
             "epoch_times": epoch_times,
             "total_time": total_time,
             "converge_time": converge_time,
             "epochs_ran": len(epoch_times),
-            "avg_gpu_util": avg_gpu_util,
-            "avg_mem_util": avg_mem_util,
-            "avg_power_w": avg_power_w,
-            "energy_wh": energy_wh,
         }
                     
     def reconstruct(self, test_final, batch_size=128):

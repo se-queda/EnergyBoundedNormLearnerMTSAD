@@ -134,6 +134,94 @@ def load_entity(entity_dir: Path) -> dict[str, Any]:
     }
 
 
+def entity_data_from_raw(
+    *,
+    labels,
+    test_phy,
+    test_res,
+    train_phy,
+    train_res,
+    test_window_size,
+    test_stride,
+    test_total_len,
+    train_window_size,
+    train_stride,
+    train_total_len,
+    test_window_indices=None,
+    train_window_indices=None,
+) -> dict[str, Any]:
+    """Build an in-memory entity bundle with the same schema as load_entity()."""
+    return {
+        "labels": np.asarray(labels).astype(int),
+        "test_phy": None if test_phy is None else np.asarray(test_phy, dtype=np.float32),
+        "test_res": None if test_res is None else np.asarray(test_res, dtype=np.float32),
+        "train_phy": None if train_phy is None else np.asarray(train_phy, dtype=np.float32),
+        "train_res": None if train_res is None else np.asarray(train_res, dtype=np.float32),
+        "test_window_size": int(test_window_size),
+        "test_stride": int(test_stride),
+        "test_total_len": int(test_total_len),
+        "test_window_indices": None if test_window_indices is None else np.asarray(test_window_indices, dtype=np.int64),
+        "train_window_size": int(train_window_size),
+        "train_stride": int(train_stride),
+        "train_total_len": int(train_total_len),
+        "train_window_indices": None if train_window_indices is None else np.asarray(train_window_indices, dtype=np.int64),
+    }
+
+
+def score_raw_entity(
+    dataset: str,
+    entity_id: str,
+    *,
+    labels,
+    test_phy,
+    test_res,
+    train_phy,
+    train_res,
+    test_window_size,
+    test_stride,
+    test_total_len,
+    train_window_size,
+    train_stride,
+    train_total_len,
+    test_window_indices=None,
+    train_window_indices=None,
+    out_dir: str | Path | None = None,
+) -> dict[str, float]:
+    """Score one entity directly from in-memory raw artifacts."""
+    dataset = str(dataset).upper()
+    entity_id = str(entity_id)
+    if out_dir is None:
+        out_dir = DEFAULT_OUT_ROOT / dataset / entity_id
+
+    out_dir = Path(out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    entity_data = entity_data_from_raw(
+        labels=labels,
+        test_phy=test_phy,
+        test_res=test_res,
+        train_phy=train_phy,
+        train_res=train_res,
+        test_window_size=test_window_size,
+        test_stride=test_stride,
+        test_total_len=test_total_len,
+        train_window_size=train_window_size,
+        train_stride=train_stride,
+        train_total_len=train_total_len,
+        test_window_indices=test_window_indices,
+        train_window_indices=train_window_indices,
+    )
+    m = score_entity(entity_data)
+
+    cfg_fields = [SCALING, MIXING, "none", SMOOTHER, CALIB, PLACEMENT, GRANULARITY]
+    _write_csv(
+        out_dir / f"{dataset.lower()}_entity_metrics.csv",
+        ENTITY_HEADER,
+        [[dataset] + cfg_fields + [entity_id] + [m[k] for k in METRIC_KEYS]],
+    )
+    return m
+
+
 def _stitch_feature_scores(
     x: np.ndarray | None,
     stride: int,
