@@ -79,6 +79,7 @@ def worker_task(mid, config, perf_path):
     except Exception as e:
         print(f"❌ Failed on {mid}: {e}")
         traceback.print_exc()
+        raise
     finally:
         try:
             K.clear_session()

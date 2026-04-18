@@ -71,17 +71,17 @@ def load_msl_windows(data_root, machine_id, config):
     test_labels = np.zeros(test_raw.shape[0], dtype=np.int32)
 
     if query.empty:
-        print(f"❌ Warning: {machine_id} not found in {csv_path}. Proceeding with 0-labels.")
+        raise ValueError(f"MSL channel {machine_id} not found in {csv_path}")
     else:
         machine_info = query.iloc[0]
         # NASA column name is 'anomaly_sequences'
         try:
             anomaly_indices = ast.literal_eval(machine_info['anomaly_sequences'])
-            for start, end in anomaly_indices:
-                # NASA indices are inclusive [start, end]
-                test_labels[start : end + 1] = 1
-        except:
-            print(f"⚠️ Failed to parse anomaly sequences for {machine_id}")
+        except Exception as e:
+            raise ValueError(f"Failed to parse anomaly sequences for {machine_id}") from e
+        for start, end in anomaly_indices:
+            # NASA indices are inclusive [start, end]
+            test_labels[start : end + 1] = 1
     
     # 7. Paper-Aligned Slicing
     actual_test_len = (test_final["phy"].shape[0] - 1) * test_stride + window
