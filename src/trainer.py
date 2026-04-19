@@ -223,7 +223,7 @@ class EBNL_Trainer:
         }
                     
     def reconstruct(self, test_final, batch_size=128):
-        print(" Generating Point-wise Reconstructions...")
+        print(" window reconstruction")
         phy_views = tf.cast(test_final['phy'], tf.float32) 
         res_data  = tf.cast(test_final['res'], tf.float32)
         phy_anchor = phy_views[:, 0, :, :] if len(phy_views.shape) == 4 else phy_views
