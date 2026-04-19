@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -111,7 +112,13 @@ def _stitch_feature_scores(
     counts = np.zeros(total_len, dtype=np.float32)
     prev_w_idx = None
 
-    for i, window_val in enumerate(x):
+    stitch_bar = tqdm(
+        enumerate(x),
+        total=len(x),
+        desc="Stitch windows",
+        unit="window",
+    )
+    for i, window_val in stitch_bar:
         w_idx = int(window_indices[i]) if window_indices is not None else i
         start = w_idx * stride
         end = min(start + window_size, total_len)
@@ -131,6 +138,7 @@ def _stitch_feature_scores(
         scores[slice_start:end] += window_val[offset: offset + slice_len]
         counts[slice_start:end] += 1
         prev_w_idx = w_idx
+        stitch_bar.set_postfix({"done": f"{min(i + 1, len(x))}/{len(x)}"})
 
     return scores / np.maximum(counts[:, None], 1.0)
 
