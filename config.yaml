@@ -28,7 +28,7 @@ lambda_joint: 1.0
 epochs: 100 #
 patience: 3 # Early stopping patience
 saved_score: false # Save raw score artifacts to disk in addition to live scoring
-
+smd_compact: true
 dataset: SMAP # Dataset type
 data_root:
   SMD: /home/utsab/Data/smd/ServerMachineDataset
