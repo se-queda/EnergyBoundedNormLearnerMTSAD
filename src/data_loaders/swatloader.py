@@ -63,8 +63,8 @@ def load_swat_windows(data_root, config):
 
     print("Training: SWAT Dataset")
     # 1. Loading & Standardization
-    train_path = os.path.join(data_root, "Train.xlsx")
-    test_path = os.path.join(data_root, "Test.xlsx")
+    train_path = os.path.join(data_root, "train.xlsx")
+    test_path = os.path.join(data_root, "test.xlsx")
 
     if not os.path.exists(train_path):
         raise FileNotFoundError(f"SWAT train file not found: {train_path}")

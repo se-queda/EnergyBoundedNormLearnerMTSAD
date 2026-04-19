@@ -158,8 +158,8 @@ def run_all_entities(config, out_dir):
         machine_ids = ["PSM_Pooled"]
     elif dataset_type == "SMD" and config.get("smd_compact", False):
         machine_ids = ["SMD_Compact"]
-    # elif dataset_type == "SWAT":
-    #     machine_ids = ["SWAT"]
+    elif dataset_type == "SWAT":
+        machine_ids = ["SWAT"]
     else:
         ext = ".txt" if dataset_type == "SMD" else ".npy"
         train_path = os.path.join(data_root, "train")
