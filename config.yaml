@@ -3,7 +3,7 @@ window_size: 64
 stride: 2
 test_stride: 1
 batch_size: 128
-test_batch_size: 16
+test_batch_size: 8
 val_split: 0.2
 
 # --- Model Hyperparameters ---
@@ -29,10 +29,10 @@ epochs: 100 #
 patience: 3 # Early stopping patience
 saved_score: false # Save raw score artifacts to disk in addition to live scoring
 smd_compact: false
-dataset: MSL # Dataset type
+dataset: SWAT # Dataset type
 data_root:
   SMD: /home/utsab/Data/smd/ServerMachineDataset
   SMAP: /home/utsab/Data/SMAP
   MSL: /home/utsab/Data/MSL
   PSM: /home/utsab/Data/PSM
-  SWAT: /home/utsab/Data/SWAT
+  SWAT: /workspace/SWAT

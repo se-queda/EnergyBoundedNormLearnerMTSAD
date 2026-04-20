@@ -27,7 +27,10 @@ def worker_task(mid, config, perf_path):
         if gpus:
             for gpu in gpus:
                 tf.config.experimental.set_memory_growth(gpu, True)
-        auc, pr_auc, p_best, r_best, f1_best, vusauc, vuspr, aff_p, aff_r, aff1, train_stats, inference_stats, diagnosis_stats, parameter_stats, models = train_on_machine(mid, config)
+        if config.get("both", False):
+            current_scored, legacy_scored, train_stats, inference_stats, diagnosis_stats, parameter_stats, models = train_on_machine(mid, config)
+        else:
+            auc, pr_auc, p_best, r_best, f1_best, vusauc, vuspr, aff_p, aff_r, aff1, train_stats, inference_stats, diagnosis_stats, parameter_stats, models = train_on_machine(mid, config)
         inf_path = os.path.join(os.path.dirname(perf_path), "inference.csv")
         diag_path = os.path.join(os.path.dirname(perf_path), "diagnosis.csv")
         param_path = os.path.join(os.path.dirname(perf_path), "parameter.csv")
@@ -53,11 +56,13 @@ def worker_task(mid, config, perf_path):
                     pass
                 with open(path, "w", newline="") as f:
                     csv.writer(f).writerow(header)
-        perf_header = ["id", "auc", "prauc", "p_best", "r_best", "f1_best", "vusaucc", "vuspr", "aff_p", "aff_r", "aff1"]
-        _ensure_header(perf_path, perf_header)
-        with open(perf_path, "a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([
+        metric_keys = ["auc", "prauc", "p_best", "r_best", "f1_best", "vusaucc", "vuspr", "aff_p", "aff_r", "aff1"]
+        if config.get("both", False):
+            perf_header = ["id"] + [f"current_{k}" for k in metric_keys] + [f"legacy_{k}" for k in metric_keys]
+            row = [mid] + [f"{float(current_scored[k]):.4f}" for k in metric_keys] + [f"{float(legacy_scored[k]):.4f}" for k in metric_keys]
+        else:
+            perf_header = ["id"] + metric_keys
+            row = [
                 mid,
                 f"{auc:.4f}",
                 f"{pr_auc:.4f}",
@@ -69,7 +74,11 @@ def worker_task(mid, config, perf_path):
                 f"{aff_p:.4f}",
                 f"{aff_r:.4f}",
                 f"{aff1:.4f}",
-            ])
+            ]
+        _ensure_header(perf_path, perf_header)
+        with open(perf_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(row)
         _compute_and_append_avg(perf_path)
 
         inf_header = ["id", "elapsed_minutes", "ms_per_sample"]
@@ -210,12 +219,13 @@ def _collect_seed_avg(perf_path, seed, out_list):
             pass
 
 
-def _write_final_results(dataset, seed_avgs):
+def _write_final_results(dataset, seed_avgs, config):
     if not seed_avgs:
         return
     dataset_dir = os.path.join("results", dataset)
     final_path = os.path.join(dataset_dir, "final_results.csv")
-    header = ["seed", "auc", "prauc", "p_best", "r_best", "f1_best", "vusaucc", "vuspr", "aff_p", "aff_r", "aff1"]
+    metric_keys = ["auc", "prauc", "p_best", "r_best", "f1_best", "vusaucc", "vuspr", "aff_p", "aff_r", "aff1"]
+    header = ["seed"] + ([f"current_{k}" for k in metric_keys] + [f"legacy_{k}" for k in metric_keys] if config.get("both", False) else metric_keys)
     with open(final_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(header)
@@ -250,7 +260,7 @@ def run_experiments(config, datasets, seeds):
             _collect_seed_avg(perf_path, s, seed_avgs_by_dataset[dataset])
 
     for dataset in datasets:
-        _write_final_results(dataset, seed_avgs_by_dataset[dataset])
+        _write_final_results(dataset, seed_avgs_by_dataset[dataset], config)
 
 
 def main():
@@ -260,9 +270,15 @@ def main():
     parser.add_argument("--datasets", nargs="+", help="Datasets for the final experimental run, e.g. --datasets MSL SMAP SMD")
     parser.add_argument("--seeds", nargs="+", type=int, help="Explicit seeds for the final experimental run, e.g. --seeds 42 43")
     parser.add_argument("--id", type=str, help="Specify a single machine/channel ID to test")
+    parser.add_argument("--legacy", action="store_true", help="Use the legacy posthoc scorer")
+    parser.add_argument("--both", action="store_true", help="Compute both current and legacy posthoc scores from one model run")
     args = parser.parse_args()
 
     config = load_config(args.config)
+    config["legacy"] = bool(args.legacy)
+    config["both"] = bool(args.both)
+    if config["both"]:
+        config["legacy"] = False
     dataset_type = config.get("dataset", "SMD").upper()
 
     if (args.datasets is None) ^ (args.seeds is None):

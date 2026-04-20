@@ -16,6 +16,7 @@ from src.data_loaders.smaploader import load_smap_windows
 from src.data_loaders.msloader import load_msl_windows
 from src.data_loaders.swatloader import load_swat_windows
 from scripts.generalized_anomaly_scorer import score_raw_entity
+from scripts.legacy_scorer import score_legacy_entity
 
 
 def load_config(path):
@@ -223,7 +224,7 @@ def train_on_machine(machine_id, config):
             labels=None,
         )
 
-    scored = score_raw_entity(
+    current_scored = score_raw_entity(
         labels=test_labels,
         test_phy=test_phy_raw,
         test_res=test_res_raw,
@@ -238,6 +239,21 @@ def train_on_machine(machine_id, config):
         test_window_indices=None,
         train_window_indices=train_idx_shifted,
     )
+    legacy_scored = score_legacy_entity(
+        labels=test_labels,
+        recons=recons,
+        topo=topo,
+        phy_dim=phy_dim,
+        test_stride=test_stride,
+        stride=stride,
+        W=W,
+        actual_len=actual_len,
+        trainer=trainer,
+        train_final=train_final,
+        train_idx=train_idx,
+    )
+
+    scored = legacy_scored if config.get("legacy", False) else current_scored
 
     auc_score = float(scored["auc"])
     pr_auc_score = float(scored["prauc"])
@@ -267,7 +283,18 @@ def train_on_machine(machine_id, config):
         test_window_indices=None,
         train_window_indices=train_idx_shifted,
     )
-    print(f"[RESULTS] AUC: {auc_score:.4f} | PR-AUC: {pr_auc_score:.4f} | P: {p_best:.4f} | R: {r_best:.4f} | F1: {f1_best:.4f} | vusauc: {vusauc:.4f} | vuspr: {vuspr:.4f} | aff_p: {aff_p:.4f} | aff_r: {aff_r:.4f} | aff1: {aff1:.4f}")
+    if config.get("both", False):
+        def _fmt(prefix, out):
+            return (
+                f"[{prefix}] AUC: {float(out['auc']):.4f} | PR-AUC: {float(out['prauc']):.4f} | "
+                f"P: {float(out['p_best']):.4f} | R: {float(out['r_best']):.4f} | F1: {float(out['f1_best']):.4f} | "
+                f"vusauc: {float(out['vusaucc']):.4f} | vuspr: {float(out['vuspr']):.4f} | "
+                f"aff_p: {float(out['aff_p']):.4f} | aff_r: {float(out['aff_r']):.4f} | aff1: {float(out['aff1']):.4f}"
+            )
+        print(_fmt('RESULTS current', current_scored))
+        print(_fmt('RESULTS legacy', legacy_scored))
+    else:
+        print(f"[RESULTS] AUC: {auc_score:.4f} | PR-AUC: {pr_auc_score:.4f} | P: {p_best:.4f} | R: {r_best:.4f} | F1: {f1_best:.4f} | vusauc: {vusauc:.4f} | vuspr: {vuspr:.4f} | aff_p: {aff_p:.4f} | aff_r: {aff_r:.4f} | aff1: {aff1:.4f}")
     print(
         f"[INFERENCE] Elapsed time: {inference_stats['elapsed_minutes']:.4f} mins | "
         f"Inference per sample: {inference_stats['ms_per_sample']:.4f} ms"
@@ -276,6 +303,13 @@ def train_on_machine(machine_id, config):
     K.clear_session()
 
     gc.collect()
+
+    if config.get("both", False):
+        return (
+            current_scored, legacy_scored,
+            train_stats, inference_stats, diagnosis_stats, parameter_stats,
+            (encoder, decoder, discriminator, res_discriminator)
+        )
 
     return (
         auc_score, pr_auc_score, p_best, r_best, f1_best, vusauc, vuspr, aff_p, aff_r, aff1,
