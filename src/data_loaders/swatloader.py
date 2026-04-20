@@ -1,4 +1,5 @@
 import os
+import re
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
@@ -39,14 +40,28 @@ def _labels_from_series(series):
     return is_attack.astype(np.int32).values
 
 
-def _read_xlsx(path, use_bfill):
-    df = pd.read_excel(path).ffill()
+def _has_bad_header(df):
+    cols = [str(c).strip().lower() for c in df.columns]
+    if not cols:
+        return True
+    unnamed = sum(c.startswith("unnamed") for c in cols)
+    return unnamed >= max(1, len(cols) // 2)
+
+
+def _read_table(path, use_bfill):
+    csv_path = os.path.splitext(path)[0] + ".csv"
+    if os.path.exists(csv_path):
+        df = pd.read_csv(csv_path)
+        if _has_bad_header(df):
+            df = pd.read_excel(path, header=1).ffill()
+            df.to_csv(csv_path, index=False)
+    else:
+        df = pd.read_excel(path).ffill()
+        if _has_bad_header(df):
+            df = pd.read_excel(path, header=1).ffill()
+        df.to_csv(csv_path, index=False)
     if use_bfill:
         df = df.bfill()
-    if all(str(c).strip().lower().startswith("unnamed") for c in df.columns):
-        df = pd.read_excel(path, header=1).ffill()
-        if use_bfill:
-            df = df.bfill()
     return df
 
 
@@ -71,15 +86,18 @@ def load_swat_windows(data_root, config):
     if not os.path.exists(test_path):
         raise FileNotFoundError(f"SWAT test file not found: {test_path}")
 
-    train_df = _read_xlsx(train_path, use_bfill=True)
-    test_df = _read_xlsx(test_path, use_bfill=False)
+    train_df = _read_table(train_path, use_bfill=True)
+    test_df = _read_table(test_path, use_bfill=False)
 
     train_df.columns = [str(c).strip() for c in train_df.columns]
     test_df.columns = [str(c).strip() for c in test_df.columns]
 
+    def _canon(name):
+        return re.sub(r"\s+", "", str(name)).lower()
+
     label_col = None
     for c in test_df.columns:
-        if str(c).strip().lower() == "normal/attack":
+        if _canon(c) == "normal/attack":
             label_col = c
             break
     if label_col is None:
@@ -97,12 +115,18 @@ def load_swat_windows(data_root, config):
         if col in test_df.columns:
             test_df = test_df.drop(columns=[col])
 
-    if list(train_df.columns) != list(test_df.columns):
-        common_cols = [c for c in train_df.columns if c in test_df.columns]
-        if not common_cols:
-            raise ValueError("SWAT train/test files have no common feature columns.")
-        train_df = train_df[common_cols]
-        test_df = test_df[common_cols]
+    train_map = {_canon(c): c for c in train_df.columns}
+    test_map = {_canon(c): c for c in test_df.columns}
+    common_keys = [k for k in train_map.keys() if k in test_map]
+    if not common_keys:
+        raise ValueError(
+            "SWAT train/test files have no common feature columns. "
+            f"train sample={list(train_df.columns[:8])} test sample={list(test_df.columns[:8])}"
+        )
+    train_df = train_df[[train_map[k] for k in common_keys]]
+    test_df = test_df[[test_map[k] for k in common_keys]]
+    train_df.columns = common_keys
+    test_df.columns = common_keys
 
     train_raw = _coerce_features(train_df, use_bfill=True)
     test_raw = _coerce_features(test_df, use_bfill=False)
