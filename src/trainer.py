@@ -224,46 +224,31 @@ class EBNL_Trainer:
                     
     def reconstruct(self, test_final, batch_size=128):
         print(" window reconstruction")
-        phy_views = tf.cast(test_final['phy'], tf.float32)
-        res_data = tf.cast(test_final['res'], tf.float32)
+        phy_views = np.asarray(test_final['phy'], dtype=np.float32)
+        res_data = np.asarray(test_final['res'], dtype=np.float32)
         phy_anchor = phy_views[:, 0, :, :] if len(phy_views.shape) == 4 else phy_views
 
-        z_sys_list, z_res_list = [], []
-        num_encode_batches = (len(phy_anchor) + batch_size - 1) // batch_size
-        encode_bar = tqdm(
+        phy_hat_chunks, res_hat_chunks = [], []
+        num_batches = (len(phy_anchor) + batch_size - 1) // batch_size
+        recon_bar = tqdm(
             range(0, len(phy_anchor), batch_size),
-            total=num_encode_batches,
-            desc="Reconstruct/encode",
+            total=num_batches,
+            desc="Reconstruct",
             unit="batch",
         )
-        for i in encode_bar:
-            p_batch = phy_anchor[i:i+batch_size]
-            r_batch = res_data[i:i+batch_size]
+        for i in recon_bar:
+            p_batch = tf.convert_to_tensor(phy_anchor[i:i+batch_size], dtype=tf.float32)
+            r_batch = tf.convert_to_tensor(res_data[i:i+batch_size], dtype=tf.float32)
             r_batch_time = self._append_time(r_batch)
             zs, zr, _ = self.encoder([p_batch, r_batch_time], training=False)
-            z_sys_list.append(zs)
-            z_res_list.append(zr)
-            encode_bar.set_postfix({"done": f"{min(i + batch_size, len(phy_anchor))}/{len(phy_anchor)}"})
-
-        z_sys = tf.concat(z_sys_list, axis=0)
-        z_res = tf.concat(z_res_list, axis=0)
-        phy_hat_list, res_hat_list = [], []
-        num_decode_batches = (len(z_sys) + batch_size - 1) // batch_size
-        decode_bar = tqdm(
-            range(0, len(z_sys), batch_size),
-            total=num_decode_batches,
-            desc="Reconstruct/decode",
-            unit="batch",
-        )
-        for i in decode_bar:
-            ph, rh = self.decoder([z_sys[i:i+batch_size], z_res[i:i+batch_size]], training=False)
-            phy_hat_list.append(ph)
-            res_hat_list.append(rh)
-            decode_bar.set_postfix({"done": f"{min(i + batch_size, len(z_sys))}/{len(z_sys)}"})
+            ph, rh = self.decoder([zs, zr], training=False)
+            phy_hat_chunks.append(ph.numpy())
+            res_hat_chunks.append(rh.numpy())
+            recon_bar.set_postfix({"done": f"{min(i + batch_size, len(phy_anchor))}/{len(phy_anchor)}"})
 
         return {
-            "phy_orig": phy_anchor.numpy(),
-            "phy_hat": tf.concat(phy_hat_list, axis=0).numpy(),
-            "res_orig": res_data.numpy(),
-            "res_hat": tf.concat(res_hat_list, axis=0).numpy()
+            "phy_orig": phy_anchor,
+            "phy_hat": np.concatenate(phy_hat_chunks, axis=0),
+            "res_orig": res_data,
+            "res_hat": np.concatenate(res_hat_chunks, axis=0),
         }
