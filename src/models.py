@@ -213,9 +213,11 @@ def build_dual_decoder(feat_sys, feat_res, output_steps, config):
     for i in range(config.get("fno_decoder_blocks", 1)):
         x_r = fno_block(x_r, h_dim, modes=f_modes, dropout=drop_rate)
 
-    x_r = layers.Conv1D(feat_res, 1, padding='same', 
+    x_r = layers.LayerNormalization(name='residual_decoder_norm')(x_r)
+    x_r = layers.Conv1D(feat_res, 1, padding='same',
                         kernel_regularizer=regularizers.l2(REG))(x_r)
-    out_res = layers.Activation('linear', name='out_res')(x_r)
+    x_r_boosted = layers.Lambda(lambda x: x * 2.0, name='residual_pre_tanh_gain')(x_r)
+    out_res = layers.Activation('tanh', name='out_res')(x_r_boosted)
     
     return models.Model([z_sys_in, z_res_in], [out_sys, out_res])
 

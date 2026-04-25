@@ -167,6 +167,10 @@ def run_all_entities(config, out_dir):
         machine_ids = ["PSM_Pooled"]
     elif dataset_type == "SMD" and config.get("smd_compact", False):
         machine_ids = ["SMD_Compact"]
+    elif dataset_type == "SMAP" and config.get("smap_compact", False):
+        machine_ids = ["SMAP_Compact"]
+    elif dataset_type == "MSL" and config.get("msl_compact", False):
+        machine_ids = ["MSL_Compact"]
     elif dataset_type == "SWAT":
         machine_ids = ["SWAT"]
     else:
@@ -308,6 +312,10 @@ def main():
             mid = defaults.get(dataset_type, "test_entity")
             if dataset_type == "SMD" and config.get("smd_compact", False):
                 mid = "SMD_Compact"
+            elif dataset_type == "SMAP" and config.get("smap_compact", False):
+                mid = "SMAP_Compact"
+            elif dataset_type == "MSL" and config.get("msl_compact", False):
+                mid = "MSL_Compact"
         print(f"starting single-entity test run: {mid}")
         csv_path = f"results/{dataset_type}_performance_metrics.csv"
         worker_task(mid, config, csv_path)

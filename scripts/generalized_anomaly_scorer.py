@@ -53,6 +53,64 @@ def entity_data_from_raw(
     }
 
 
+def stitch_branch_scores(
+    *,
+    test_phy,
+    test_res,
+    train_phy,
+    train_res,
+    test_window_size,
+    test_stride,
+    test_total_len,
+    train_window_size,
+    train_stride,
+    train_total_len,
+    test_window_indices=None,
+    train_window_indices=None,
+) -> dict[str, np.ndarray]:
+    test_p = _stitch_feature_scores(test_phy, test_stride, test_window_size, test_total_len, test_window_indices)
+    test_l = _stitch_feature_scores(test_res, test_stride, test_window_size, test_total_len, test_window_indices)
+    train_p = _stitch_feature_scores(train_phy, train_stride, train_window_size, train_total_len, train_window_indices)
+    train_l = _stitch_feature_scores(train_res, train_stride, train_window_size, train_total_len, train_window_indices)
+
+    if test_p is None:
+        test_p = np.zeros((test_total_len, 0), dtype=np.float32)
+    if test_l is None:
+        test_l = np.zeros((test_total_len, 0), dtype=np.float32)
+    if train_p is None:
+        train_p = np.zeros((0, test_p.shape[1] if test_p.ndim == 2 else 0), dtype=np.float32)
+    if train_l is None:
+        train_l = np.zeros((0, test_l.shape[1] if test_l.ndim == 2 else 0), dtype=np.float32)
+
+    return {
+        "test_p": test_p,
+        "test_l": test_l,
+        "train_p": train_p,
+        "train_l": train_l,
+    }
+
+
+def score_stitched_entity(*, labels, test_p, test_l, train_p, train_l) -> dict[str, float]:
+    labels = np.asarray(labels).astype(int)
+
+    test_p_scaled = _scale_identity(test_p)
+    test_l_scaled = _scale_identity(test_l)
+    train_p_scaled = _scale_identity(train_p)
+    train_l_scaled = _scale_identity(train_l)
+
+    test_p_cal = _calibrate_standard(test_p_scaled, train_p_scaled)
+    test_l_cal = _calibrate_standard(test_l_scaled, train_l_scaled)
+
+    branch_p = _reduce_branch(test_p_cal)
+    branch_l = _reduce_branch(test_l_cal)
+    point_scores = _mix_sum(branch_p, branch_l)
+    point_scores = _apply_score_smoother(point_scores)
+
+    if len(point_scores) != len(labels):
+        raise ValueError(f"Score/label length mismatch: scores={len(point_scores)} labels={len(labels)}")
+    return _compute_metrics(point_scores, labels)
+
+
 def score_raw_entity(
     *,
     labels,
@@ -69,9 +127,7 @@ def score_raw_entity(
     test_window_indices=None,
     train_window_indices=None,
 ) -> dict[str, float]:
-    """Score one entity directly from in-memory raw artifacts."""
-    entity_data = entity_data_from_raw(
-        labels=labels,
+    stitched = stitch_branch_scores(
         test_phy=test_phy,
         test_res=test_res,
         train_phy=train_phy,
@@ -85,7 +141,7 @@ def score_raw_entity(
         test_window_indices=test_window_indices,
         train_window_indices=train_window_indices,
     )
-    return score_entity(entity_data)
+    return score_stitched_entity(labels=labels, **stitched)
 
 
 def _stitch_feature_scores(
@@ -187,58 +243,23 @@ def _apply_score_smoother(x: np.ndarray) -> np.ndarray:
 
 def score_entity(entity_data: dict[str, Any]) -> dict[str, float]:
     """Run the fixed scorer on one entity."""
-    W  = int(entity_data["test_window_size"])
-    S  = int(entity_data["test_stride"])
     TL = int(entity_data["test_total_len"])
     labels = np.asarray(entity_data["labels"]).astype(int)[:TL]
-
-    tw_idx = entity_data.get("test_window_indices")
-    rw_idx = entity_data.get("train_window_indices")
-    train_W = int(entity_data["train_window_size"])
-    train_S = int(entity_data["train_stride"])
-    train_TL = int(entity_data["train_total_len"])
-
-    # 1. Stitch raw test/train windows to pointwise feature scores [T, F].
-    test_p  = _stitch_feature_scores(entity_data["test_phy"],   S, W, TL, tw_idx)
-    test_l  = _stitch_feature_scores(entity_data["test_res"],   S, W, TL, tw_idx)
-    train_p = _stitch_feature_scores(entity_data["train_phy"], train_S, train_W, train_TL, rw_idx)
-    train_l = _stitch_feature_scores(entity_data["train_res"], train_S, train_W, train_TL, rw_idx)
-
-    if test_p is None:
-        test_p = np.zeros((TL, 0), dtype=np.float32)
-    if test_l is None:
-        test_l = np.zeros((TL, 0), dtype=np.float32)
-    if train_p is None:
-        train_p = np.zeros((0, test_p.shape[1] or 1), dtype=np.float32)
-    if train_l is None:
-        train_l = np.zeros((0, test_l.shape[1] or 1), dtype=np.float32)
-
-    # 2. Scale pointwise branch features.
-    test_p_scaled  = _scale_identity(test_p)
-    test_l_scaled  = _scale_identity(test_l)
-    train_p_scaled = _scale_identity(train_p)
-    train_l_scaled = _scale_identity(train_l)
-
-    # 3. Calibrate test features with train statistics.
-    test_p_cal = _calibrate_standard(test_p_scaled, train_p_scaled)
-    test_l_cal = _calibrate_standard(test_l_scaled, train_l_scaled)
-
-    # 4. Reduce each branch from [T, F] to [T].
-    branch_p = _reduce_branch(test_p_cal)
-    branch_l = _reduce_branch(test_l_cal)
-
-    # 5. Mix the branch score streams.
-    point_scores = _mix_sum(branch_p, branch_l)
-
-    # 6. Smooth the final point score stream.
-    point_scores = _apply_score_smoother(point_scores)
-
-    if len(point_scores) != len(labels):
-        raise ValueError(
-            f"Score/label length mismatch: scores={len(point_scores)} labels={len(labels)}"
-        )
-
-    return _compute_metrics(point_scores, labels)
+    stitched = stitch_branch_scores(
+        test_phy=entity_data["test_phy"],
+        test_res=entity_data["test_res"],
+        train_phy=entity_data["train_phy"],
+        train_res=entity_data["train_res"],
+        test_window_size=int(entity_data["test_window_size"]),
+        test_stride=int(entity_data["test_stride"]),
+        test_total_len=TL,
+        train_window_size=int(entity_data["train_window_size"]),
+        train_stride=int(entity_data["train_stride"]),
+        train_total_len=int(entity_data["train_total_len"]),
+        test_window_indices=entity_data.get("test_window_indices"),
+        train_window_indices=entity_data.get("train_window_indices"),
+    )
+    return score_stitched_entity(labels=labels, **stitched)
 
 def _compute_metrics(scores: np.ndarray, labels: np.ndarray) -> dict[str, float]:
     if labels.sum() <= 0:
