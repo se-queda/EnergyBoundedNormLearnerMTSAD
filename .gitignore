@@ -208,3 +208,6 @@ __marimo__/
 results/
 
 posthoc_runs/
+scores/
+weights/
+diagnosis/
