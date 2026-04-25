@@ -27,7 +27,7 @@ lambda_joint: 1.0
 # --- Training Loop ---
 epochs: 100 #
 patience: 3 # Early stopping patience
-saved_score: true # Save raw score artifacts to disk in addition to live scoring
+saved_score: false # Save raw score artifacts to disk in addition to live scoring
 smd_compact: true
 smap_compact: true
 msl_compact: True
