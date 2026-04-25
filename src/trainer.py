@@ -2,6 +2,7 @@ import tensorflow as tf
 import time
 from tqdm import tqdm
 import numpy as np
+import os
 from types import SimpleNamespace
 from .losses import encoder_loss, discriminator_loss
 from .masking import mix_features
@@ -157,7 +158,7 @@ class EBNL_Trainer:
         
         return total_recon_loss, loss_disc, loss_enc
 
-    def fit(self, train_ds, val_ds=None, epochs=200):
+    def fit(self, train_ds, val_ds=None, epochs=200, steps_per_epoch=None):
         best_val_loss = float("inf")
         wait = 0 
         epoch_times = []
@@ -170,7 +171,12 @@ class EBNL_Trainer:
             self.disc_metric.reset_state()
             self.enc_metric.reset_state()
             
-            bar = tqdm(train_ds, desc=f"Epoch {epoch+1}", unit="batch")
+            bar = tqdm(
+                train_ds,
+                total=steps_per_epoch,
+                desc=f"Epoch {epoch+1}",
+                unit="batch",
+            )
             for phy_batch, res_batch in bar:
                 r_loss, d_loss, e_loss = self._train_step(phy_batch, res_batch)
                 self.recon_metric.update_state(r_loss)
@@ -252,3 +258,123 @@ class EBNL_Trainer:
             "res_orig": res_data,
             "res_hat": np.concatenate(res_hat_chunks, axis=0),
         }
+
+    def reconstruct_stitched(
+        self,
+        data_final,
+        *,
+        batch_size=128,
+        window_size,
+        stride,
+        total_len,
+        window_indices=None,
+        save_dir=None,
+        split=None,
+        labels=None,
+    ):
+        print(" window reconstruction")
+        phy_views = np.asarray(data_final["phy"], dtype=np.float32)
+        res_data = np.asarray(data_final["res"], dtype=np.float32)
+        phy_anchor = phy_views[:, 0, :, :] if len(phy_views.shape) == 4 else phy_views
+
+        phy_dim = phy_anchor.shape[-1] if phy_anchor.ndim == 3 else 0
+        res_dim = res_data.shape[-1] if res_data.ndim == 3 else 0
+        num_windows = len(phy_anchor)
+
+        stitched_phy = np.zeros((total_len, phy_dim), dtype=np.float32) if phy_dim > 0 else np.zeros((total_len, 0), dtype=np.float32)
+        stitched_res = np.zeros((total_len, res_dim), dtype=np.float32) if res_dim > 0 else np.zeros((total_len, 0), dtype=np.float32)
+        counts = np.zeros(total_len, dtype=np.float32)
+
+        phy_raw = None
+        res_raw = None
+        phy_tmp = None
+        res_tmp = None
+        if save_dir and split:
+            os.makedirs(save_dir, exist_ok=True)
+            if phy_dim > 0:
+                phy_tmp = os.path.join(save_dir, f".{split}_phy_raw.tmp.npy")
+                phy_raw = np.lib.format.open_memmap(phy_tmp, mode="w+", dtype=np.float32, shape=phy_anchor.shape)
+            if res_dim > 0:
+                res_tmp = os.path.join(save_dir, f".{split}_res_raw.tmp.npy")
+                res_raw = np.lib.format.open_memmap(res_tmp, mode="w+", dtype=np.float32, shape=res_data.shape)
+
+        prev_w_idx = None
+        num_batches = (num_windows + batch_size - 1) // batch_size
+        recon_bar = tqdm(
+            range(0, num_windows, batch_size),
+            total=num_batches,
+            desc="Reconstruct",
+            unit="batch",
+        )
+        for start_idx in recon_bar:
+            end_idx = min(start_idx + batch_size, num_windows)
+            p_batch = tf.convert_to_tensor(phy_anchor[start_idx:end_idx], dtype=tf.float32)
+            r_batch = tf.convert_to_tensor(res_data[start_idx:end_idx], dtype=tf.float32)
+            r_batch_time = self._append_time(r_batch)
+            zs, zr, _ = self.encoder([p_batch, r_batch_time], training=False)
+            ph, rh = self.decoder([zs, zr], training=False)
+
+            ph_np = ph.numpy() if phy_dim > 0 else None
+            rh_np = rh.numpy() if res_dim > 0 else None
+            phy_err = np.square(phy_anchor[start_idx:end_idx] - ph_np, dtype=np.float32) if phy_dim > 0 else None
+            res_err = np.square(res_data[start_idx:end_idx] - rh_np, dtype=np.float32) if res_dim > 0 else None
+
+            if phy_raw is not None and phy_err is not None:
+                phy_raw[start_idx:end_idx] = phy_err
+            if res_raw is not None and res_err is not None:
+                res_raw[start_idx:end_idx] = res_err
+
+            for local_i in range(end_idx - start_idx):
+                global_i = start_idx + local_i
+                w_idx = int(window_indices[global_i]) if window_indices is not None else global_i
+                start = w_idx * stride
+                end = min(start + window_size, total_len)
+                if end <= start:
+                    prev_w_idx = w_idx
+                    continue
+
+                full_window = (prev_w_idx is None) or (w_idx - prev_w_idx > 1) or (stride >= window_size)
+                slice_start = start if full_window else max(start, end - stride)
+                if slice_start >= end:
+                    prev_w_idx = w_idx
+                    continue
+
+                offset = slice_start - start
+                slice_len = end - slice_start
+                if phy_err is not None:
+                    stitched_phy[slice_start:end] += phy_err[local_i, offset: offset + slice_len]
+                if res_err is not None:
+                    stitched_res[slice_start:end] += res_err[local_i, offset: offset + slice_len]
+                counts[slice_start:end] += 1
+                prev_w_idx = w_idx
+
+            del p_batch, r_batch, r_batch_time, zs, zr, ph, rh, ph_np, rh_np, phy_err, res_err
+            recon_bar.set_postfix({"done": f"{end_idx}/{num_windows}"})
+
+        denom = np.maximum(counts[:, None], 1.0)
+        out = {
+            "stitched_phy": stitched_phy / denom if phy_dim > 0 else stitched_phy,
+            "stitched_res": stitched_res / denom if res_dim > 0 else stitched_res,
+        }
+
+        if save_dir and split:
+            np.savez_compressed(
+                os.path.join(save_dir, f"{split}_meta.npz"),
+                window_indices=np.asarray(window_indices) if window_indices is not None else None,
+                total_len=int(total_len),
+                stride=int(stride),
+                window_size=int(window_size),
+                labels=np.asarray(labels) if labels is not None else None,
+            )
+            if phy_raw is not None:
+                phy_raw.flush()
+                np.savez_compressed(os.path.join(save_dir, f"{split}_phy_raw.npz"), err=phy_raw)
+                del phy_raw
+                os.remove(phy_tmp)
+            if res_raw is not None:
+                res_raw.flush()
+                np.savez_compressed(os.path.join(save_dir, f"{split}_res_raw.npz"), err=res_raw)
+                del res_raw
+                os.remove(res_tmp)
+
+        return out

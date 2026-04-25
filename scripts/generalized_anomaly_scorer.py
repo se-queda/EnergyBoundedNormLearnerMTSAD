@@ -95,13 +95,15 @@ def _stitch_feature_scores(
     total_len: int,
     window_indices: np.ndarray | None = None,
 ) -> np.ndarray | None:
-    """Map raw error windows [N, W, F] to stitched point scores [T, F]."""
+    """Map raw error windows [N, W, F] or stitched feature scores [T, F] to point scores [T, F]."""
     if x is None:
         return None
     if x.ndim == 2:
-        raise ValueError(
-            f"Expected raw window tensor [N, W, F], received legacy point tensor {x.shape}"
-        )
+        if x.shape[0] != total_len:
+            raise ValueError(
+                f"Expected stitched point tensor with first dim {total_len}, got {x.shape}"
+            )
+        return np.nan_to_num(np.asarray(x, dtype=np.float32), nan=0.0)
     if x.ndim != 3:
         raise ValueError(f"Expected [N, W, F] tensor, got shape {x.shape}")
     if x.shape[-1] == 0:
@@ -256,4 +258,3 @@ def _compute_metrics(scores: np.ndarray, labels: np.ndarray) -> dict[str, float]
         "aff_r":   float(out["aff_r"]),
         "aff1":    float(out["aff1"]),
     }
-

@@ -3,6 +3,8 @@ import os
 import numpy as np
 import gc
 import time
+import shutil
+import tempfile
 from tensorflow.keras import backend as K
 import tensorflow as tf
 from tqdm import tqdm
@@ -14,6 +16,7 @@ from src.data_loaders.smdloader import load_smd_windows
 from src.data_loaders.smd_compact_loader import load_smd_compact_windows
 from src.data_loaders.smaploader import load_smap_windows
 from src.data_loaders.msloader import load_msl_windows
+from src.data_loaders.nasa_compact_loader import load_smap_compact_windows, load_msl_compact_windows
 from src.data_loaders.swatloader import load_swat_windows
 from scripts.generalized_anomaly_scorer import score_raw_entity
 from scripts.legacy_scorer import score_legacy_entity
@@ -58,9 +61,15 @@ def train_on_machine(machine_id, config):
     if dataset_type == "PSM":
         train_final, test_final, test_labels, _, _ = load_psm_windows(data_root, config)
     elif dataset_type == "SMAP":
-        train_final, test_final, test_labels, _, _ = load_smap_windows(data_root, machine_id, config)
+        if config.get("smap_compact", False):
+            train_final, test_final, test_labels, _, _ = load_smap_compact_windows(data_root, config)
+        else:
+            train_final, test_final, test_labels, _, _ = load_smap_windows(data_root, machine_id, config)
     elif dataset_type == "MSL":
-        train_final, test_final, test_labels, _, _ = load_msl_windows(data_root, machine_id, config)
+        if config.get("msl_compact", False):
+            train_final, test_final, test_labels, _, _ = load_msl_compact_windows(data_root, config)
+        else:
+            train_final, test_final, test_labels, _, _ = load_msl_windows(data_root, machine_id, config)
     elif dataset_type == "SWAT":
           train_final, test_final, test_labels, _, _ = load_swat_windows(data_root, config)
     else:
@@ -86,9 +95,8 @@ def train_on_machine(machine_id, config):
         
     # 2. Build Datasets
     from src.utils import build_tf_datasets
-    train_ds, val_ds, _, train_idx, val_idx = build_tf_datasets(
+    train_ds, val_ds, train_idx, val_idx = build_tf_datasets(
         train_final,
-        test_final,
         val_split=VS,
         batch_size=BS,
         val_normal_only=config.get("val_normal_only", True),
@@ -116,19 +124,30 @@ def train_on_machine(machine_id, config):
     parameter_stats = summarize_parameters(encoder, decoder, discriminator, res_discriminator)
     
     # Training with Early Stopping
-    train_stats = trainer.fit(train_ds, val_ds=val_ds, epochs=EP)
+    steps_per_epoch = int(np.ceil(len(train_idx) / BS)) if train_idx is not None and len(train_idx) > 0 else None
+    train_stats = trainer.fit(train_ds, val_ds=val_ds, epochs=EP, steps_per_epoch=steps_per_epoch)
     
     # Save Weights
     save_path = os.path.join("weights", dataset_type, str(machine_id))
     os.makedirs(save_path, exist_ok=True)
     trainer.encoder.save_weights(f"{save_path}/encoder.weights.h5")
     trainer.decoder.save_weights(f"{save_path}/decoder.weights.h5")
-    # 5. Save raw reconstruction artifacts
+    # 5. Stream reconstruction errors to disk-backed raw artifacts and stitch once.
+    raw_work_dir = os.path.join("scores", dataset_type, str(machine_id), "raw") if config.get("saved_score", False) else tempfile.mkdtemp(prefix=f"{dataset_type.lower()}_raw_")
     inference_start = time.perf_counter()
-    recons = trainer.reconstruct(test_final, batch_size=TEST_BS)
+    actual_len = (len(test_final['res']) - 1) * test_stride + W
+    test_artifacts = trainer.reconstruct_stitched(
+        test_final,
+        batch_size=TEST_BS,
+        window_size=W,
+        stride=test_stride,
+        total_len=actual_len,
+        window_indices=None,
+        save_dir=raw_work_dir,
+        split="test",
+        labels=test_labels[:actual_len],
+    )
     inference_elapsed = time.perf_counter() - inference_start
-    actual_len = (recons['res_orig'].shape[0] - 1) * test_stride + W
-    res_orig, res_hat = recons['res_orig'], recons['res_hat']
     inference_stats = summarize_inference(inference_elapsed, actual_len)
 
     def _compute_train_raw_artifacts():
@@ -152,84 +171,37 @@ def train_on_machine(machine_id, config):
         if train_total_len <= 0:
             return None, None, None
 
-        train_recons = trainer.reconstruct({"phy": train_phy, "res": train_res})
-        return train_recons, train_idx_shifted, train_total_len
+        train_artifacts = trainer.reconstruct_stitched(
+            {"phy": train_phy, "res": train_res},
+            batch_size=TEST_BS,
+            window_size=W,
+            stride=stride,
+            total_len=train_total_len,
+            window_indices=train_idx_shifted,
+            save_dir=raw_work_dir,
+            split="train",
+            labels=None,
+        )
+        return train_artifacts, train_idx_shifted, train_total_len
 
-    train_recons, train_idx_shifted, train_total_len = _compute_train_raw_artifacts()
-    if train_recons is None:
+    train_artifacts, train_idx_shifted, train_total_len = _compute_train_raw_artifacts()
+    if train_artifacts is None:
         raise RuntimeError("Train raw artifacts unavailable for external scoring.")
 
     test_labels = test_labels[:actual_len]
     
     print(f" Raw windows stitched to {actual_len} points | Labels: {len(test_labels)} | Anomaly Rate: {np.mean(test_labels):.2%}")
-
-    test_phy_raw = None
-    test_res_raw = None
-    if phy_dim > 0:
-        test_phy_raw = np.square(recons["phy_orig"] - recons["phy_hat"])
-    if res_orig.shape[-1] > 0:
-        test_res_raw = np.square(res_orig - res_hat)
-
-    train_phy_raw = None
-    train_res_raw = None
-    if train_recons is not None and phy_dim > 0:
-        train_phy_raw = np.square(train_recons["phy_orig"] - train_recons["phy_hat"])
-    if train_recons is not None and train_recons["res_orig"].shape[-1] > 0:
-        train_res_raw = np.square(train_recons["res_orig"] - train_recons["res_hat"])
-
-    def _save_raw_feature_scores(out_dir, split, phy_err, res_err, window_indices, total_len, stride_val, window_size, labels=None):
-        os.makedirs(out_dir, exist_ok=True)
-        np.savez_compressed(
-            os.path.join(out_dir, f"{split}_meta.npz"),
-            window_indices=np.asarray(window_indices) if window_indices is not None else None,
-            total_len=int(total_len),
-            stride=int(stride_val),
-            window_size=int(window_size),
-            labels=np.asarray(labels) if labels is not None else None,
-        )
-        if phy_err is not None:
-            np.savez_compressed(
-                os.path.join(out_dir, f"{split}_phy_raw.npz"),
-                err=np.asarray(phy_err),
-            )
-        if res_err is not None:
-            np.savez_compressed(
-                os.path.join(out_dir, f"{split}_res_raw.npz"),
-                err=np.asarray(res_err),
-            )
-
-    if config.get("saved_score", False):
-        scores_dir = os.path.join("scores", dataset_type, str(machine_id), "raw")
-        os.makedirs(scores_dir, exist_ok=True)
-        _save_raw_feature_scores(
-            scores_dir,
-            "test",
-            test_phy_raw,
-            test_res_raw,
-            None,
-            actual_len,
-            test_stride,
-            W,
-            labels=test_labels,
-        )
-        _save_raw_feature_scores(
-            scores_dir,
-            "train",
-            train_phy_raw,
-            train_res_raw,
-            train_idx_shifted,
-            train_total_len,
-            stride,
-            W,
-            labels=None,
-        )
+    test_phy_raw = np.load(os.path.join(raw_work_dir, "test_phy_raw.npz"))["err"] if phy_dim > 0 and os.path.exists(os.path.join(raw_work_dir, "test_phy_raw.npz")) else None
+    test_res_raw = np.load(os.path.join(raw_work_dir, "test_res_raw.npz"))["err"] if res_dim > 0 and os.path.exists(os.path.join(raw_work_dir, "test_res_raw.npz")) else None
+    train_phy_raw = np.load(os.path.join(raw_work_dir, "train_phy_raw.npz"))["err"] if phy_dim > 0 and os.path.exists(os.path.join(raw_work_dir, "train_phy_raw.npz")) else None
+    train_res_raw = np.load(os.path.join(raw_work_dir, "train_res_raw.npz"))["err"] if res_dim > 0 and os.path.exists(os.path.join(raw_work_dir, "train_res_raw.npz")) else None
 
     current_scored = score_raw_entity(
         labels=test_labels,
-        test_phy=test_phy_raw,
-        test_res=test_res_raw,
-        train_phy=train_phy_raw,
-        train_res=train_res_raw,
+        test_phy=test_artifacts["stitched_phy"],
+        test_res=test_artifacts["stitched_res"],
+        train_phy=train_artifacts["stitched_phy"],
+        train_res=train_artifacts["stitched_res"],
         test_window_size=W,
         test_stride=test_stride,
         test_total_len=actual_len,
@@ -241,16 +213,10 @@ def train_on_machine(machine_id, config):
     )
     legacy_scored = score_legacy_entity(
         labels=test_labels,
-        recons=recons,
-        topo=topo,
-        phy_dim=phy_dim,
-        test_stride=test_stride,
-        stride=stride,
-        W=W,
-        actual_len=actual_len,
-        trainer=trainer,
-        train_final=train_final,
-        train_idx=train_idx,
+        test_p=np.mean(test_artifacts["stitched_phy"], axis=1, dtype=np.float32) if test_artifacts["stitched_phy"].shape[1] > 0 else np.zeros(actual_len, dtype=np.float32),
+        test_l=np.mean(test_artifacts["stitched_res"], axis=1, dtype=np.float32) if test_artifacts["stitched_res"].shape[1] > 0 else np.zeros(actual_len, dtype=np.float32),
+        train_p=np.mean(train_artifacts["stitched_phy"], axis=1, dtype=np.float32) if train_artifacts["stitched_phy"].shape[1] > 0 else np.zeros(train_total_len, dtype=np.float32),
+        train_l=np.mean(train_artifacts["stitched_res"], axis=1, dtype=np.float32) if train_artifacts["stitched_res"].shape[1] > 0 else np.zeros(train_total_len, dtype=np.float32),
     )
 
     scored = legacy_scored if config.get("legacy", False) else current_scored
@@ -300,6 +266,10 @@ def train_on_machine(machine_id, config):
         f"Inference per sample: {inference_stats['ms_per_sample']:.4f} ms"
     )
     print(f"[PARAMS] Num. of params: {parameter_stats['total_params']}")
+
+    if not config.get("saved_score", False):
+        shutil.rmtree(raw_work_dir, ignore_errors=True)
+
     K.clear_session()
 
     gc.collect()

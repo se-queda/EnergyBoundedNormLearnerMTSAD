@@ -16,7 +16,6 @@ def load_txt_file(path):
 
 def build_tf_datasets(
     train_final,
-    test_final,
     val_split=0.2,
     batch_size=128,
     val_normal_only=False,
@@ -70,22 +69,31 @@ def build_tf_datasets(
     train_phy, train_res = phy_data[train_idx], res_data[train_idx]
     val_phy, val_res = phy_data[val_idx], res_data[val_idx]
     
-    test_phy, test_res = test_final['phy'], test_final['res']
-
     AUTOTUNE = tf.data.AUTOTUNE
 
     def make_dataset(phy, res, shuffle=False):
-        ds_phy = tf.data.Dataset.from_tensor_slices(phy)
-        ds_res = tf.data.Dataset.from_tensor_slices(res)
-        ds = tf.data.Dataset.zip((ds_phy, ds_res))
+        phy = np.asarray(phy, dtype=np.float32)
+        res = np.asarray(res, dtype=np.float32)
+
+        output_signature = (
+            tf.TensorSpec(shape=phy.shape[1:], dtype=tf.float32),
+            tf.TensorSpec(shape=res.shape[1:], dtype=tf.float32),
+        )
+
+        def gen():
+            for i in range(len(phy)):
+                yield phy[i], res[i]
+
+        ds = tf.data.Dataset.from_generator(gen, output_signature=output_signature)
         if shuffle:
-            ds = ds.cache().shuffle(2048)
-        return ds.batch(batch_size).prefetch(AUTOTUNE)
+            shuffle_buf = min(len(phy), 4096)
+            if shuffle_buf > 1:
+                ds = ds.shuffle(shuffle_buf, reshuffle_each_iteration=True)
+        return ds.batch(batch_size, drop_remainder=False).prefetch(AUTOTUNE)
 
     return (
         make_dataset(train_phy, train_res, shuffle=True),
         make_dataset(val_phy, val_res),
-        make_dataset(test_phy, test_res),
         train_idx,
         val_idx,
     )

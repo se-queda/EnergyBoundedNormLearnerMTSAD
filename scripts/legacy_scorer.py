@@ -80,92 +80,108 @@ def _scale_with_stats(s, stats):
 def score_legacy_entity(
     *,
     labels,
-    recons,
-    topo,
-    phy_dim: int,
-    test_stride: int,
-    stride: int,
-    W: int,
-    actual_len: int,
-    trainer,
-    train_final,
-    train_idx,
+    recons=None,
+    topo=None,
+    phy_dim: int = 0,
+    test_stride: int = 1,
+    stride: int = 1,
+    W: int = 1,
+    actual_len: int = 0,
+    trainer=None,
+    train_final=None,
+    train_idx=None,
+    test_p=None,
+    test_l=None,
+    train_p=None,
+    train_l=None,
 ) -> dict[str, float]:
-    if phy_dim > 0:
-        se_p = np.mean(np.square(recons['phy_orig'] - recons['phy_hat']), axis=-1)
-        e_p = aggregate_scores(se_p, test_stride, W, actual_len)
+    if test_p is not None and test_l is not None and train_p is not None and train_l is not None:
+        e_p = np.asarray(test_p, dtype=np.float32)
+        e_l = np.asarray(test_l, dtype=np.float32)
+        e_d = np.zeros(len(e_p), dtype=np.float32)
+        e_p_train = np.asarray(train_p, dtype=np.float32)
+        e_l_train = np.asarray(train_l, dtype=np.float32)
+        e_d_train = np.zeros(len(e_p_train), dtype=np.float32)
+        train_counts = np.ones(len(e_p_train), dtype=np.float32)
     else:
-        e_p = np.zeros(actual_len)
-
-    res_orig, res_hat = recons['res_orig'], recons['res_hat']
-    if len(topo.res_to_lone_local) > 0:
-        se_l = np.mean(
-            np.square(res_orig[:, :, topo.res_to_lone_local] - res_hat[:, :, topo.res_to_lone_local]),
-            axis=-1,
-        )
-        e_l = aggregate_scores(se_l, test_stride, W, actual_len)
-    else:
-        e_l = np.zeros(actual_len)
-
-    e_d = np.zeros(actual_len)
-
-    def _compute_train_scores():
-        if train_idx is None or len(train_idx) == 0 or 'phy_anchor' not in train_final or 'res_orig' not in train_final:
-            return None, None, None, None
-        train_order = np.sort(train_idx)
-        train_phy = train_final['phy_anchor'][train_order]
-        train_res = train_final['res_orig'][train_order]
-        train_idx_shifted = train_order
-        num_train_windows = len(train_final['phy_anchor'])
-        if len(train_idx_shifted) > 0:
-            if train_idx_shifted.min() < 0 or train_idx_shifted.max() > num_train_windows - 1:
-                raise RuntimeError(
-                    f"Train window index out of bounds: expected within [0,{num_train_windows-1}] got [{train_idx_shifted.min()},{train_idx_shifted.max()}]."
-                )
-            train_total_len = (num_train_windows - 1) * stride + W
-        else:
-            train_total_len = 0
-
-        if train_total_len <= 0:
-            return None, None, None, None
-
-        train_recons = trainer.reconstruct({'phy': train_phy, 'res': train_res})
-        train_num_windows = train_recons['res_orig'].shape[0]
-        dummy = np.ones((train_num_windows, W), dtype=float)
-        _, train_counts = aggregate_scores(
-            dummy,
-            stride,
-            W,
-            train_total_len,
-            window_indices=train_idx_shifted,
-            return_counts=True,
-        )
+        if recons is None or topo is None or trainer is None or train_final is None:
+            raise ValueError("Legacy scorer requires either stitched branch scores or reconstruction artifacts.")
 
         if phy_dim > 0:
-            se_p_train = np.mean(np.square(train_recons['phy_orig'] - train_recons['phy_hat']), axis=-1)
-            e_p_train = aggregate_scores(se_p_train, stride, W, train_total_len, window_indices=train_idx_shifted)
+            se_p = np.mean(np.square(recons['phy_orig'] - recons['phy_hat']), axis=-1)
+            e_p = aggregate_scores(se_p, test_stride, W, actual_len)
         else:
-            e_p_train = np.zeros(train_total_len)
+            e_p = np.zeros(actual_len)
 
-        train_res_orig, train_res_hat = train_recons['res_orig'], train_recons['res_hat']
+        res_orig, res_hat = recons['res_orig'], recons['res_hat']
         if len(topo.res_to_lone_local) > 0:
-            se_l_train = np.mean(
-                np.square(
-                    train_res_orig[:, :, topo.res_to_lone_local]
-                    - train_res_hat[:, :, topo.res_to_lone_local]
-                ),
+            se_l = np.mean(
+                np.square(res_orig[:, :, topo.res_to_lone_local] - res_hat[:, :, topo.res_to_lone_local]),
                 axis=-1,
             )
-            e_l_train = aggregate_scores(se_l_train, stride, W, train_total_len, window_indices=train_idx_shifted)
+            e_l = aggregate_scores(se_l, test_stride, W, actual_len)
         else:
-            e_l_train = np.zeros(train_total_len)
+            e_l = np.zeros(actual_len)
 
-        e_d_train = np.zeros(train_total_len)
-        return e_p_train, e_l_train, e_d_train, train_counts
+        e_d = np.zeros(actual_len)
 
-    e_p_train, e_l_train, e_d_train, train_counts = _compute_train_scores()
-    if e_p_train is None:
-        raise RuntimeError('Train stats unavailable for robust normalization.')
+        def _compute_train_scores():
+            if train_idx is None or len(train_idx) == 0 or 'phy_anchor' not in train_final or 'res_orig' not in train_final:
+                return None, None, None, None
+            train_order = np.sort(train_idx)
+            train_phy = train_final['phy_anchor'][train_order]
+            train_res = train_final['res_orig'][train_order]
+            train_idx_shifted = train_order
+            num_train_windows = len(train_final['phy_anchor'])
+            if len(train_idx_shifted) > 0:
+                if train_idx_shifted.min() < 0 or train_idx_shifted.max() > num_train_windows - 1:
+                    raise RuntimeError(
+                        f"Train window index out of bounds: expected within [0,{num_train_windows-1}] got [{train_idx_shifted.min()},{train_idx_shifted.max()}]."
+                    )
+                train_total_len = (num_train_windows - 1) * stride + W
+            else:
+                train_total_len = 0
+
+            if train_total_len <= 0:
+                return None, None, None, None
+
+            train_recons = trainer.reconstruct({'phy': train_phy, 'res': train_res})
+            train_num_windows = train_recons['res_orig'].shape[0]
+            dummy = np.ones((train_num_windows, W), dtype=float)
+            _, train_counts = aggregate_scores(
+                dummy,
+                stride,
+                W,
+                train_total_len,
+                window_indices=train_idx_shifted,
+                return_counts=True,
+            )
+
+            if phy_dim > 0:
+                se_p_train = np.mean(np.square(train_recons['phy_orig'] - train_recons['phy_hat']), axis=-1)
+                e_p_train = aggregate_scores(se_p_train, stride, W, train_total_len, window_indices=train_idx_shifted)
+            else:
+                e_p_train = np.zeros(train_total_len)
+
+            train_res_orig, train_res_hat = train_recons['res_orig'], train_recons['res_hat']
+            if len(topo.res_to_lone_local) > 0:
+                se_l_train = np.mean(
+                    np.square(
+                        train_res_orig[:, :, topo.res_to_lone_local]
+                        - train_res_hat[:, :, topo.res_to_lone_local]
+                    ),
+                    axis=-1,
+                )
+                e_l_train = aggregate_scores(se_l_train, stride, W, train_total_len, window_indices=train_idx_shifted)
+            else:
+                e_l_train = np.zeros(train_total_len)
+
+            e_d_train = np.zeros(train_total_len)
+            return e_p_train, e_l_train, e_d_train, train_counts
+
+        e_p_train, e_l_train, e_d_train, train_counts = _compute_train_scores()
+        if e_p_train is None:
+            raise RuntimeError('Train stats unavailable for robust normalization.')
 
     train_norm_stats = {
         'p': _robust_stats(e_p_train, train_counts),

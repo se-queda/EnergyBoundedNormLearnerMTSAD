@@ -27,12 +27,14 @@ lambda_joint: 1.0
 # --- Training Loop ---
 epochs: 100 #
 patience: 3 # Early stopping patience
-saved_score: false # Save raw score artifacts to disk in addition to live scoring
+saved_score: True # Save raw score artifacts to disk in addition to live scoring
 smd_compact: True
+smap_compact: True
+msl_compact: True
 dataset: MSL # Dataset type
 data_root:
-  SMD: /workspace/smd/smd/ServeMachineDataset
+  SMD: /home/utsab/Data/smd/ServerMachineDataset
   SMAP: /home/utsab/Data/SMAP
   MSL: /home/utsab/Data/MSL
   PSM: /home/utsab/Data/PSM
-  SWAT: /workspace/SWAT/SWAT
+  SWAT: /home/utsab/Data/SWAT
