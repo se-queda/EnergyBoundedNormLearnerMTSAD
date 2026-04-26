@@ -16,7 +16,6 @@ def load_txt_file(path):
 
 def build_tf_datasets(
     train_final,
-    test_final,
     val_split=0.2,
     batch_size=128,
     val_normal_only=False,
@@ -69,8 +68,6 @@ def build_tf_datasets(
     
     train_phy, train_res = phy_data[train_idx], res_data[train_idx]
     val_phy, val_res = phy_data[val_idx], res_data[val_idx]
-    
-    test_phy, test_res = test_final['phy'], test_final['res']
 
     AUTOTUNE = tf.data.AUTOTUNE
 
@@ -85,7 +82,6 @@ def build_tf_datasets(
     return (
         make_dataset(train_phy, train_res, shuffle=True),
         make_dataset(val_phy, val_res),
-        make_dataset(test_phy, test_res),
         train_idx,
         val_idx,
     )

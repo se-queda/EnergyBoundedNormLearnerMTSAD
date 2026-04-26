@@ -182,17 +182,10 @@ def build_dual_encoder(input_shape_sys, input_shape_res, config):
     return models.Model([inputs_sys, inputs_res], [z_sys, z_res, z_combined])
 
 
-def build_dual_decoder(feat_sys, feat_res, output_steps, config):
+def build_sys_decoder(feat_sys, output_steps, config):
     L = config.get("latent_dim", 512)
-    h_dim = config.get("hnn_feature_dim", 256)
-    f_modes = config.get("fno_modes", 8)
-    drop_rate = config.get("dropout", 0.1)
-    
-    # Latent inputs
     z_sys_in = layers.Input(shape=(L // 2,), name="z_sys_input")
-    z_res_in = layers.Input(shape=(L // 2,), name="z_res_input")
-    
-    # DECODER A:Hamiltonian Reconstruction
+
     x_s = layers.Dense(output_steps * 64, activation='tanh', 
                        kernel_regularizer=regularizers.l2(REG))(z_sys_in)
     x_s = layers.Reshape((output_steps, 64))(x_s)
@@ -205,8 +198,18 @@ def build_dual_decoder(feat_sys, feat_res, output_steps, config):
         # Safety for zero-hnn feature cases
         out_sys = layers.Lambda(lambda x: tf.zeros((tf.shape(x)[0], output_steps, 0)), 
                                 name='out_phy')(x_s) 
-    
-    # DECODER B: FNO Path 
+
+    return models.Model(z_sys_in, out_sys)
+
+
+def build_res_decoder(feat_res, output_steps, config):
+    L = config.get("latent_dim", 512)
+    h_dim = config.get("hnn_feature_dim", 256)
+    f_modes = config.get("fno_modes", 8)
+    drop_rate = config.get("dropout", 0.1)
+
+    z_res_in = layers.Input(shape=(L // 2,), name="z_res_input")
+
     x_r = layers.Dense(output_steps * h_dim, activation='gelu',
                        kernel_regularizer=regularizers.l2(REG))(z_res_in)
     x_r = layers.Reshape((output_steps, h_dim))(x_r)
@@ -218,8 +221,8 @@ def build_dual_decoder(feat_sys, feat_res, output_steps, config):
                         kernel_regularizer=regularizers.l2(REG))(x_r)
     x_r_boosted = layers.Lambda(lambda x: x * 2.0, name='residual_pre_tanh_gain')(x_r)
     out_res = layers.Activation('tanh', name='out_res')(x_r_boosted)
-    
-    return models.Model([z_sys_in, z_res_in], [out_sys, out_res])
+
+    return models.Model(z_res_in, out_res)
 
 
 def build_discriminator(input_dim):

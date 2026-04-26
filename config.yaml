@@ -2,8 +2,8 @@
 window_size: 64
 stride: 2
 test_stride: 1
-batch_size: 128
-test_batch_size: 16
+batch_size: 64
+test_batch_size: 128
 val_split: 0.2
 
 # --- Model Hyperparameters ---
@@ -27,11 +27,11 @@ lambda_joint: 1.0
 # --- Training Loop ---
 epochs: 100 #
 patience: 3 # Early stopping patience
-saved_score: false # Save raw score artifacts to disk in addition to live scoring
+saved_score: true # Save raw score artifacts to disk in addition to live scoring
 smd_compact: true
 smap_compact: true
-msl_compact: True
-dataset: MSL # Dataset type
+msl_compact: true
+dataset: SMAP # Dataset type
 data_root:
   SMD: /workspace/smd/smd/ServeMachineDataset
   SMAP: /home/utsab/Data/SMAP

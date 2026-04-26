@@ -93,9 +93,8 @@ def train_on_machine(machine_id, config):
         
     # 2. Build Datasets
     from src.utils import build_tf_datasets
-    train_ds, val_ds, _, train_idx, val_idx = build_tf_datasets(
+    train_ds, val_ds, train_idx, val_idx = build_tf_datasets(
         train_final,
-        test_final,
         val_split=VS,
         batch_size=BS,
         val_normal_only=config.get("val_normal_only", True),
@@ -104,9 +103,10 @@ def train_on_machine(machine_id, config):
     )
 
     # 3. Build Models
-    from src.models import build_dual_encoder, build_dual_decoder, build_discriminator, build_res_discriminator
+    from src.models import build_dual_encoder, build_sys_decoder, build_res_decoder, build_discriminator, build_res_discriminator
     encoder = build_dual_encoder(input_shape_sys=(W, phy_dim), input_shape_res=(W, res_dim + 1), config=config)
-    decoder = build_dual_decoder(feat_sys=phy_dim, feat_res=res_dim, output_steps=W, config=config)
+    decoder_sys = build_sys_decoder(feat_sys=phy_dim, output_steps=W, config=config)
+    decoder_res = build_res_decoder(feat_res=res_dim, output_steps=W, config=config)
     discriminator = build_discriminator(input_dim=L)
     res_discriminator = build_res_discriminator(input_dim=L // 2)
 
@@ -114,13 +114,14 @@ def train_on_machine(machine_id, config):
     from src.trainer import EBNL_Trainer
     trainer = EBNL_Trainer(
         encoder=encoder,
-        decoder=decoder,
+        decoder_sys=decoder_sys,
+        decoder_res=decoder_res,
         discriminator=discriminator,
         res_discriminator=res_discriminator,
         config={**config, "patience": current_patience},
         topology=topo,
     )
-    parameter_stats = summarize_parameters(encoder, decoder, discriminator, res_discriminator)
+    parameter_stats = summarize_parameters(encoder, decoder_sys, decoder_res, discriminator, res_discriminator)
     
     # Training with Early Stopping
     train_stats = trainer.fit(train_ds, val_ds=val_ds, epochs=EP)
@@ -129,7 +130,8 @@ def train_on_machine(machine_id, config):
     save_path = os.path.join("weights", dataset_type, str(machine_id))
     os.makedirs(save_path, exist_ok=True)
     trainer.encoder.save_weights(f"{save_path}/encoder.weights.h5")
-    trainer.decoder.save_weights(f"{save_path}/decoder.weights.h5")
+    trainer.decoder_sys.save_weights(f"{save_path}/decoder_sys.weights.h5")
+    trainer.decoder_res.save_weights(f"{save_path}/decoder_res.weights.h5")
     # 5. Stream reconstruction errors directly into stitched branch scores.
     inference_start = time.perf_counter()
     scores_dir = os.path.join("scores", dataset_type, str(machine_id), "raw") if config.get("saved_score", False) else None
@@ -276,11 +278,11 @@ def train_on_machine(machine_id, config):
         return (
             current_scored, legacy_scored,
             train_stats, inference_stats, diagnosis_stats, parameter_stats,
-            (encoder, decoder, discriminator, res_discriminator)
+            (encoder, decoder_sys, decoder_res, discriminator, res_discriminator)
         )
 
     return (
         auc_score, pr_auc_score, p_best, r_best, f1_best, vusauc, vuspr, aff_p, aff_r, aff1,
         train_stats, inference_stats, diagnosis_stats, parameter_stats,
-        (encoder, decoder, discriminator, res_discriminator)
+        (encoder, decoder_sys, decoder_res, discriminator, res_discriminator)
     )

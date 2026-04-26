@@ -9,9 +9,10 @@ from .masking import mix_features
 namespace = tf.keras
 
 class EBNL_Trainer:
-    def __init__(self, encoder, decoder, discriminator, res_discriminator, config, topology):
+    def __init__(self, encoder, decoder_sys, decoder_res, discriminator, res_discriminator, config, topology):
         self.encoder = encoder
-        self.decoder = decoder
+        self.decoder_sys = decoder_sys
+        self.decoder_res = decoder_res
         self.discriminator = discriminator
         self.res_discriminator = res_discriminator
         if topology is None:
@@ -63,7 +64,8 @@ class EBNL_Trainer:
             # 2. Forward Pass
             res_with_time = self._append_time(res_windows)
             z_sys, z_res, _ = self.encoder([anchor_phy, res_with_time], training=True)
-            recons_phy, recons_res = self.decoder([z_sys, z_res], training=True)
+            recons_phy = self.decoder_sys(z_sys, training=True)
+            recons_res = self.decoder_res(z_res, training=True)
             
             # 3. HNN Reconstruction Loss
             if self.topo.idx_phy.shape[0] > 0:
@@ -127,21 +129,22 @@ class EBNL_Trainer:
                          self.lambda_d * loss_disc +
                          self.lambda_e * loss_enc)
 
+            # Decouple the residual branch from the HNN adversarial encoder loss.
+            # Keep the residual objective local to reconstruction + residual adversarial terms.
             fno_total = (self.recon_weight * recon_res_loss +
                          self.res_adv_weight * res_adv_loss +
-                         res_disc_loss +
-                         self.lambda_joint * loss_enc)
+                         res_disc_loss)
 
         # Apply two optimizer views over the shared encoder/decoder: one driven by
         # the HNO adversarial objective, one by the residual objective.
         hnn_vars = (
             self.encoder.trainable_variables +
-            self.decoder.trainable_variables +
+            self.decoder_sys.trainable_variables +
             self.discriminator.trainable_variables
         )
         fno_vars = (
             self.encoder.trainable_variables +
-            self.decoder.trainable_variables +
+            self.decoder_res.trainable_variables +
             self.res_discriminator.trainable_variables
         )
 
@@ -187,7 +190,8 @@ class EBNL_Trainer:
                     v_phy_anchor = v_phy[:, 0, :, :] 
                     v_res_time = self._append_time(v_res)
                     z_s, z_r, _ = self.encoder([v_phy_anchor, v_res_time], training=False)
-                    h_phy, h_res = self.decoder([z_s, z_r], training=False)
+                    h_phy = self.decoder_sys(z_s, training=False)
+                    h_res = self.decoder_res(z_r, training=False)
                     if self.topo.idx_phy.shape[0] > 0:
                         mse_phy = tf.reduce_mean(tf.square(v_phy_anchor - h_phy))
                     else:
@@ -242,7 +246,8 @@ class EBNL_Trainer:
             r_batch = tf.convert_to_tensor(res_data[i:i+batch_size], dtype=tf.float32)
             r_batch_time = self._append_time(r_batch)
             zs, zr, _ = self.encoder([p_batch, r_batch_time], training=False)
-            ph, rh = self.decoder([zs, zr], training=False)
+            ph = self.decoder_sys(zs, training=False)
+            rh = self.decoder_res(zr, training=False)
             phy_hat_chunks.append(ph.numpy())
             res_hat_chunks.append(rh.numpy())
             recon_bar.set_postfix({"done": f"{min(i + batch_size, len(phy_anchor))}/{len(phy_anchor)}"})
@@ -310,7 +315,8 @@ class EBNL_Trainer:
             r_batch = tf.convert_to_tensor(res_data[start_idx:end_idx], dtype=tf.float32)
             r_batch_time = self._append_time(r_batch)
             zs, zr, _ = self.encoder([p_batch, r_batch_time], training=False)
-            ph, rh = self.decoder([zs, zr], training=False)
+            ph = self.decoder_sys(zs, training=False)
+            rh = self.decoder_res(zr, training=False)
 
             ph_np = ph.numpy() if phy_dim > 0 else None
             rh_np = rh.numpy() if res_dim > 0 else None
